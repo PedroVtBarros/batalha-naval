@@ -28,12 +28,15 @@ Este arquivo é a documentação única da aplicação: propósito, funcionament
 | Fase | Entrega | Responsável | Situação |
 |------|---------|-------------|----------|
 | 1 | Protocolo: `protocolo.py`, este `readme.md` e `tests/test_protocolo.py` | Pedro | **Implementado** |
-| 2 | Tabuleiros e regras da partida (posicionar navios, validar e aplicar disparos) | Integrante 2 | Previsto |
-| 3 | Servidor (conexões, turnos, sincronização) | Integrante 3 | Previsto |
-| 4 | Cliente e interface de terminal | Integrante 4 | Previsto |
-| 5 | Testes de integração e fechamento da documentação | Pedro | Previsto |
+| 2 | Tabuleiro: criar, posicionar navios e verificar disparos | Integrante 2 | **Implementado** |
+| 3 | Servidor: aceitar os dois jogadores e aguardar o segundo | Integrante 3 | Previsto |
+| 4 | Cliente: conectar ao servidor e receber mensagens | Integrante 4 | Previsto |
+| 5 | Regras da partida: turnos, vitória e visão de cada jogador | Integrante 2 | Previsto |
+| 6 | Servidor: integrar as regras, receber disparos e enviar resultados | Integrante 3 | Previsto |
+| 7 | Cliente: interface e entrada dos disparos | Integrante 4 | Previsto |
+| 8 | Testes de integração e fechamento da documentação | Pedro | Previsto |
 
-O que existe hoje, e funciona, é só a fase 1. **Não existem ainda** servidor, cliente, tabuleiros nem regras: tudo o que este documento descreve sobre eles é o *contrato* que as fases 2 a 4 devem cumprir. Os nomes de arquivo `servidor.py`, `cliente.py` e `tabuleiro.py` são sugestões dos responsáveis.
+As fases 1 e 2 estão implementadas: protocolo de comunicação e tabuleiro de um jogador. **Ainda não é possível disputar uma partida**: faltam cliente, servidor e controle da partida (turnos, vitória e visão de cada jogador). As mensagens, estados e eventos abaixo são o contrato para as próximas fases. Os nomes `servidor.py` e `cliente.py` continuam sendo sugestões para os respectivos responsáveis.
 
 Estrutura atual:
 
@@ -41,8 +44,10 @@ Estrutura atual:
 .
 ├── readme.md                  documentação única (este arquivo)
 ├── protocolo.py               envio e recebimento de mensagens (compartilhado)
+├── tabuleiro.py               navios e disparos recebidos por um jogador
 └── tests/
-    └── test_protocolo.py      testes do protocolo.py
+    ├── test_protocolo.py      testes do protocolo.py
+    └── test_tabuleiro.py      testes do tabuleiro.py
 ```
 
 ## 2. Propósito e funcionamento
@@ -183,6 +188,42 @@ Exemplo: o tabuleiro com navios em `A1-B1` (horizontal) e `D4-D5` (vertical), co
 - `tabuleiro_adversario` mostra apenas o que o jogador já descobriu com os próprios disparos: **só contém `~`, `O` e `X`, nunca `N`**.
 - O servidor **nunca** envia o tabuleiro próprio de um jogador ao outro.
 - Um navio está **afundado** quando suas 2 casas foram atingidas. Isso aparece no `resultado` `AFUNDOU` e em `navios_restantes`.
+
+### Usando o tabuleiro.py (fase 2)
+
+Este módulo representa **um único tabuleiro**, que será mantido pelo servidor. Não usa sockets e não depende da interface: pode ser usado por um cliente de terminal ou por uma futura interface gráfica através do servidor.
+
+| Item | Comportamento |
+|------|---------------|
+| `Tabuleiro()` | Sorteia 2 navios de 2 casas num tabuleiro 5×5, na horizontal ou vertical, sem sobreposição. |
+| `Tabuleiro(navios)` | Recebe posições explícitas para testes e exemplos, como `[("A1", "B1"), ("D4", "D5")]`. Valida quantidade, tamanho, coordenadas, vizinhança e sobreposição. |
+| `Tabuleiro(gerador=random.Random(42))` | Repete um sorteio com a mesma semente, útil para reproduzir testes. |
+| `coordenada_para_indices(coordenada)` | Valida `A1` a `E5` e devolve `(linha, coluna)` começando em zero; `B3` vira `(2, 1)`. |
+| `receber_disparo(coordenada)` | Registra o tiro e devolve `AGUA`, `ACERTO` ou `AFUNDOU`. |
+| `como_lista()` | Devolve uma cópia do tabuleiro completo em 5 strings de 5 caracteres, usando `~`, `N`, `O` e `X`. |
+| `CoordenadaInvalida` | Disparo fora do formato aceito; tem `codigo = "COORDENADA_INVALIDA"`. |
+| `DisparoRepetido` | A casa já recebeu um tiro; tem `codigo = "DISPARO_REPETIDO"`. |
+| `PosicionamentoInvalido` | Os navios fornecidos ao construtor não respeitam as regras de posicionamento. |
+| `TabuleiroError` | Classe-base dos erros deste módulo. |
+
+Exemplo para executar no interpretador Python, a partir da raiz do projeto:
+
+```python
+from tabuleiro import Tabuleiro
+
+tabuleiro = Tabuleiro([("A1", "B1"), ("D4", "D5")])
+print(tabuleiro.receber_disparo("C2"))  # AGUA
+print(tabuleiro.receber_disparo("D4"))  # ACERTO
+print(tabuleiro.como_lista())
+# ['NN~~~', '~~O~~', '~~~~~', '~~~X~', '~~~N~']
+print(tabuleiro.receber_disparo("D5"))  # AFUNDOU
+```
+
+Um tiro na água marca `O`; um tiro num navio marca `X`. O resultado é `AFUNDOU` somente quando as duas casas **daquele navio** foram atingidas. Navios podem encostar, mas não podem ocupar a mesma casa. Erros de coordenada ou repetição não alteram o estado. Cada objeto mantém seus próprios navios e disparos, sem compartilhar estado com outro tabuleiro.
+
+**Integração nas próximas fases:** antes de chamar `receber_disparo`, o servidor deve verificar se a partida começou e se é a vez do jogador, nessa ordem (seção 8). O método deve ser chamado no tabuleiro **do alvo**. As exceções de disparo fornecem `codigo` e texto (`str(erro)`) para o servidor montar a mensagem `ERRO`; o módulo não envia mensagens por conta própria.
+
+`como_lista()` contém os navios intactos (`N`) e serve apenas para o servidor ou o próprio dono. **Não deve ser enviado ao adversário.** A visão filtrada, a contagem de navios restantes e o controle de turnos e vitória ficam para a fase 5. A fase 2 não cria partidas nem decide vencedores.
 
 ## 7. Catálogo de mensagens
 
@@ -599,13 +640,21 @@ A partir da raiz do projeto:
 python -m unittest discover -s tests -v
 ```
 
-(No Windows, se `python` abrir a Microsoft Store, use `py -3`.) Os testes usam `socket.socketpair()`: dois sockets reais ligados entre si, sem servidor nem cliente. Cobrem envio e recebimento de uma mensagem, duas mensagens juntas, mensagem em partes (inclusive byte a byte e cortada no meio de um caractere acentuado), JSON inválido e outras linhas inválidas, linha acima do limite, conexão encerrada, envio para conexão encerrada e mensagem interrompida antes da LF.
+Para executar somente os testes do tabuleiro (sem sockets, servidor ou cliente):
+
+```bash
+python3 -m unittest discover -s tests -p 'test_tabuleiro.py' -v
+```
+
+`tests/test_tabuleiro.py` cobre coordenadas, posicionamentos explícitos válidos e inválidos, sorteios reproduzíveis, 100 sementes de sorteio, água, acerto, afundamento, disparos repetidos, preservação do estado após erros e independência entre tabuleiros. Reproduz também o exemplo da seção 6.
+
+(No Windows, se `python` abrir a Microsoft Store, use `py -3`.) Os testes de `tests/test_protocolo.py` usam `socket.socketpair()`: dois sockets reais ligados entre si, sem servidor nem cliente. Cobrem envio e recebimento de uma mensagem, duas mensagens juntas, mensagem em partes (inclusive byte a byte e cortada no meio de um caractere acentuado), JSON inválido e outras linhas inválidas, linha acima do limite, conexão encerrada, envio para conexão encerrada e mensagem interrompida antes da LF.
 
 ## 13. Guia de leitura por integrante
 
 Todos: seções 2, 4, 5 e 11.
 
-- **Tabuleiros e regras (fase 2):** seção 6 (representação do tabuleiro, coordenadas, regra de privacidade) e 7.5 (campo `resultado` e `navios_restantes`). Seu módulo precisa permitir ao servidor: criar o tabuleiro com 2 navios de 2 casas; validar e aplicar um disparo (`AGUA`/`ACERTO`/`AFUNDOU`, ou disparo repetido); saber quantos navios restam; e gerar as duas listas de 5 strings, **sem nunca incluir `N` no tabuleiro do adversário**.
+- **Tabuleiros e regras (fases 2 e 5):** seção 6 (representação, coordenadas e API do `tabuleiro.py`) e 7.5 (`resultado` e `navios_restantes`). A fase 2 entrega o tabuleiro com 2 navios de 2 casas e a validação e aplicação dos disparos. Na fase 5 serão implementados turnos, vitória, contagem de navios restantes e visão de cada jogador, **sem nunca incluir `N` no tabuleiro do adversário**.
 - **Servidor (fase 3):** seções 5, 7, 8 e 9.2, e o exemplo da 10. Atenção à ordem de verificação do `DISPARAR`, a quem recebe cada mensagem (`ERRO` só para quem errou), à proteção do estado da partida contra acesso simultâneo e ao `Lock` por socket (seção 11).
 - **Cliente (fase 4):** seções 6, 7, 8 e 9.3, e o exemplo da 10. Atenção a normalizar a coordenada (`strip().upper()`), a decidir a ação pelo `codigo` do `ERRO` e ao uso de `INICIO`/`ATUALIZACAO` para redesenhar tudo (os tabuleiros vêm completos a cada mensagem).
 
