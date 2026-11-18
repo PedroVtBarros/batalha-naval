@@ -14,6 +14,8 @@ py -3 cliente.py           # terminal 3: jogador 2
 
 No Linux/macOS, troque `py -3` por `python3`.
 
+**Com interface gráfica (opcional):** em vez de `cliente.py`, cada jogador pode abrir `py -3 cliente_gui.py` e jogar clicando no tabuleiro do adversário (ver ["Usando o cliente_gui.py"](#usando-o-cliente_guipy-interface-gráfica)). Os dois clientes podem ser misturados na mesma partida.
+
 ## Sumário
 
 1. [Estado do projeto](#1-estado-do-projeto)
@@ -59,6 +61,7 @@ Estrutura do projeto:
 ├── partida.py                 turnos, vitória e visão de cada jogador
 ├── servidor.py                servidor TCP: recebe os jogadores e conduz a partida
 ├── cliente.py                 cliente TCP: interface de terminal e envio dos disparos
+├── cliente_gui.py             cliente TCP com interface gráfica (tkinter), opcional
 ├── .gitignore                 ignora __pycache__ e *.pyc
 └── tests/
     ├── test_protocolo.py      testes do protocolo.py
@@ -66,7 +69,8 @@ Estrutura do projeto:
     ├── test_partida.py        testes das regras da partida
     ├── test_servidor.py       testes do servidor.py
     ├── test_cliente.py        testes do cliente.py
-    └── test_integracao.py     jogo completo: servidor real + clientes reais (fase 8)
+    ├── test_integracao.py     jogo completo: servidor real + clientes reais (fase 8)
+    └── test_cliente_gui.py    testes do cliente gráfico (modelo, rede e janelas reais)
 ```
 
 ## 2. Propósito, funcionamento e arquitetura
@@ -455,6 +459,28 @@ O que o cliente faz (linhas da tabela 9.3): conexão TCP com leitor único (`mak
 **Recepção durante a digitação (fase 8).** Antes, o cliente chamava `input()` na mesma thread que lia o socket; se o adversário saísse enquanto o jogador estava no prompt, o `FIM` ficava esperando até ele apertar Enter. Agora a leitura da rede e a do teclado são threads separadas, ligadas à thread principal por uma fila (seção 2.1). O `FIM` encerra o cliente imediatamente. Como a thread do teclado só existe na vez do jogador, **`SAIR` só pode ser digitado na vez dele**; enquanto espera o adversário, a saída é `Ctrl+C`, que envia `SAIR`. Linhas digitadas fora da vez ficam no buffer do terminal e serão lidas no próximo `input()`.
 
 **Encerramento com o teclado ocupado.** Não existe como interromper um `input()` de outra thread. Se o `FIM` chega enquanto a thread do teclado ainda espera uma linha, o `main()` fecha o socket, descarrega a saída e usa `os._exit(0)`: no Linux, com o `stdin` num terminal, a finalização normal do interpretador ficou travada nessa leitura (reproduzido com Python 3.12 e `pty`). No Windows a finalização normal funciona, mas o comportamento é o mesmo nos dois sistemas. Sem leitura pendente (por exemplo, `SAIR` digitado ou `Ctrl+C` fora do prompt), o programa termina normalmente.
+
+### Usando o cliente_gui.py (interface gráfica)
+
+Cliente alternativo ao `cliente.py`, com janela. Usa o mesmo `protocolo.py` e conversa com o mesmo `servidor.py`; nada muda no servidor nem no protocolo, então um jogador pode usar a janela e o outro o terminal.
+
+```
+py -3 cliente_gui.py                                   # campos já preenchidos com 127.0.0.1 e 5050
+py -3 cliente_gui.py 192.168.0.10                      # outro computador da rede
+py -3 cliente_gui.py exemplo.run.pinggy-free.link 41599  # servidor exposto por um túnel
+```
+
+Só usa a biblioteca padrão: o `tkinter` já vem com o Python do Windows (no Linux pode ser preciso instalar o pacote `python3-tk`).
+
+**Como jogar:** confira o endereço e a porta e clique em **Conectar**. Na sua vez a faixa de status fica azul ("Sua vez!") e basta **clicar numa casa do tabuleiro do adversário**. Também é possível digitar a coordenada (por exemplo `b3`, normalizada para `B3`) e apertar Enter. Cores: azul é água, cinza é navio seu ainda intacto, `•` é tiro na água, `✕` vermelho é navio atingido, e a borda amarela marca o último disparo. O registro embaixo mostra cada mensagem. No fim, a faixa fica verde (vitória) ou vermelha (derrota), e **Nova partida** reconecta ao servidor (o servidor fecha as conexões após o `FIM`, seção 14, item 7). **Sair da partida** ou fechar a janela envia `SAIR`.
+
+**Como funciona por dentro:**
+
+| Parte | Papel |
+|-------|-------|
+| `ModeloCliente` | Estado do jogador (seção 9.3). Recebe cada mensagem do servidor e atualiza tabuleiros, vez, navios restantes e desfecho. `pode_disparar` só dá resposta rápida ao clique (sua vez, casa ainda não atingida, sem disparo pendente); **o servidor sempre valida de novo**. Não usa Tk nem sockets, por isso é testado sozinho. |
+| `ConexaoServidor` | Socket TCP, leitor único (`makefile("rb")`) e uma **thread de leitura** que coloca cada mensagem numa `queue.Queue`. Envia `DISPARAR`/`SAIR` com um lock. A conexão é aberta numa thread separada (resolver um nome de túnel pode demorar) e a leitura só começa depois de o aviso "conectado" entrar na fila, para que o `AGUARDE` nunca chegue antes dele. |
+| `InterfaceGrafica` | A janela. A cada 50 ms (`root.after`) esvazia a fila, passa as mensagens ao modelo e redesenha. **Só a thread do tkinter toca nos widgets**, porque o tkinter não pode ser usado por outras threads. Assim a janela nunca congela esperando a rede e o `FIM` aparece mesmo fora da sua vez. |
 
 ## 7. Catálogo de mensagens
 
@@ -931,6 +957,8 @@ python3 -m unittest discover -s tests -p 'test_partida.py' -v
 ```
 
 `tests/test_partida.py` cobre jogador inicial, alternância de turnos, prioridade dos erros, tentativas inválidas sem mudança de estado, visões dos dois jogadores iguais às da seção 10, contagens relativas, cópias das visões e partidas independentes. Exercita partidas completas com vitória de cada jogador, impedimento de novos tiros após o fim e privacidade da frota do vencedor.
+
+`tests/test_cliente_gui.py` testa o cliente gráfico em três níveis: o `ModeloCliente` sozinho (cada mensagem do servidor, `pode_disparar`, desfechos), a `ConexaoServidor` contra um servidor real (partida completa, `SAIR`, envio após fechar) e **duas janelas reais** numa partida completa jogada por cliques e por digitação, fechamento da janela avisando o adversário, porta inválida e servidor inexistente. Os testes de janela são pulados se não houver tela disponível.
 
 `tests/test_cliente.py` testa o `cliente.py` contra um servidor real em `127.0.0.1` e via `socket.socketpair()`. Cobre `AGUARDE`, `INICIO` e transição de turno, desenho dos tabuleiros, `SERVIDOR_CHEIO`, envio de `SAIR`, `ERRO` sem alterar estado, `ATUALIZACAO`, `FIM`, queda de conexão e argumentos de linha de comando.
 
