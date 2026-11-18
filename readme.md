@@ -14,6 +14,8 @@ py -3 cliente.py           # terminal 3: jogador 2
 
 No Linux/macOS, troque `py -3` por `python3`.
 
+**Interface gráfica (Tkinter):** no lugar do `cliente.py`, abra `py -3 cliente_gui.py` em cada computador de jogador (veja a [seção 3.5](#35-interface-gráfica-tkinter)). Ela conversa com o mesmo servidor e pode jogar contra o cliente de terminal.
+
 ## Sumário
 
 1. [Estado do projeto](#1-estado-do-projeto)
@@ -49,6 +51,8 @@ No Linux/macOS, troque `py -3` por `python3`.
 
 Todas as fases estão implementadas: protocolo de comunicação, tabuleiro de um jogador, regras completas em `partida.py` (turnos, vitória e visão de cada jogador), servidor que recebe os dois jogadores, processa os disparos com essas regras e envia `ATUALIZACAO` e `FIM`, e cliente com interface de terminal. A fase 8 acrescentou `tests/test_integracao.py` (servidor real e clientes reais por TCP, inclusive como processos) e corrigiu um defeito do cliente: ele ficava bloqueado esperando a digitação e só percebia o `FIM` do servidor depois de o jogador apertar Enter (ver [seção 2.1](#21-arquitetura)). As mensagens, estados e eventos abaixo são o contrato.
 
+**Extensão posterior às fases:** `cliente_gui.py` (com `nucleo_gui.py`) acrescenta uma interface gráfica Tkinter ao cliente, sem mudar o protocolo, o servidor nem o `cliente.py` de terminal (ver [seção 3.5](#35-interface-gráfica-tkinter) e "Usando o cliente_gui.py" na seção 6).
+
 Estrutura do projeto:
 
 ```
@@ -59,6 +63,8 @@ Estrutura do projeto:
 ├── partida.py                 turnos, vitória e visão de cada jogador
 ├── servidor.py                servidor TCP: recebe os jogadores e conduz a partida
 ├── cliente.py                 cliente TCP: interface de terminal e envio dos disparos
+├── cliente_gui.py             cliente com interface gráfica Tkinter (somente a janela)
+├── nucleo_gui.py              lógica da interface sem Tkinter: modelo da partida, sessão de rede, validação
 ├── .gitignore                 ignora __pycache__ e *.pyc
 └── tests/
     ├── test_protocolo.py      testes do protocolo.py
@@ -66,6 +72,8 @@ Estrutura do projeto:
     ├── test_partida.py        testes das regras da partida
     ├── test_servidor.py       testes do servidor.py
     ├── test_cliente.py        testes do cliente.py
+    ├── test_gui_logica.py     testes do nucleo_gui.py (sem janela)
+    ├── test_cliente_gui.py    testes da janela contra o servidor real (pulados sem Tkinter/tela)
     └── test_integracao.py     jogo completo: servidor real + clientes reais (fase 8)
 ```
 
@@ -142,7 +150,8 @@ Assim, se o adversário sair ou cair enquanto o jogador está no prompt `Sua vez
 ### 3.1 Requisitos
 
 - **Python 3.10 ou superior** (compatibilidade **estimada**, ver abaixo), somente biblioteca padrão (`socket`, `json`, `threading`, `unittest`...). Nada para instalar com `pip`.
-- **Versões efetivamente testadas** (a suíte completa, 157 testes, passou nas duas):
+- **Tkinter, só para a interface gráfica** (`cliente_gui.py`): faz parte da biblioteca padrão. No Windows e no macOS já vem com o instalador oficial do Python (no instalador, mantenha **tcl/tk and IDLE** marcado). No Debian/Ubuntu: `sudo apt install python3-tk`. Confira com `py -3 -m tkinter` (abre uma janelinha de teste) ou `python3 -c "import tkinter"`. O servidor e o cliente de terminal **não** precisam do Tkinter. É preciso uma tela (desktop) para abrir a janela.
+- **Versões efetivamente testadas** (a suíte original, 157 testes, passou nas duas; os testes da interface gráfica, que elevam a suíte a 238, foram executados somente no Windows 11 com Python 3.14.10 e Tk 9.0, não no WSL):
   - Windows 11, Python **3.14.10** (`py -3`), inclusive o cliente e o servidor em console real, com `Ctrl+C` real;
   - Ubuntu no WSL, Python **3.12.3** (`python3`), inclusive o cliente e o servidor num pseudo-terminal (`pty`) com `Ctrl+C`.
 - **Compatibilidade estimada, não testada:** Python **3.10 e 3.11**. O mínimo de 3.10 vem da leitura do código (tipos `X | None` avaliados em tempo de execução em `partida.py` e `TimeoutError` como o erro de tempo esgotado de `socket`), não de uma execução. Também **não testados:** macOS e dois computadores físicos (roteiro na seção 3.4).
@@ -158,8 +167,9 @@ Os argumentos são **posicionais** (não há opções como `--porta`):
 |---------|------------|---------|
 | `servidor.py [porta]` | `porta`: 1 a 65535 | `5050`. Sempre escuta em **`0.0.0.0`** (todas as interfaces); o endereço de escuta não é configurável. |
 | `cliente.py [endereco_do_servidor] [porta]` | `endereco_do_servidor`: IP ou nome; `porta`: 1 a 65535 | `127.0.0.1` e `5050`. Para informar a porta é preciso informar também o endereço. |
+| `cliente_gui.py [endereco_do_servidor] [porta]` | Os mesmos; só **preenchem os campos** da tela de conexão (nada conecta sozinho) | `127.0.0.1` e `5050` |
 
-Códigos de saída: `0` ao terminar normalmente; `1` se o cliente não conseguiu conectar ou o servidor não conseguiu abrir a porta; `2` para argumentos inválidos.
+Códigos de saída: `0` ao terminar normalmente; `1` se o cliente não conseguiu conectar ou o servidor não conseguiu abrir a porta (no `cliente_gui.py`: Tkinter ausente ou sem tela; falhas de conexão aparecem na janela); `2` para argumentos inválidos.
 
 ### 3.3 Executar no mesmo computador
 
@@ -221,6 +231,37 @@ py -3 cliente.py 192.168.0.10              # computador B: jogador 2
 **Se não conectar:** confira que os dois computadores estão na mesma rede (Wi-Fi "de convidados" costuma isolar os dispositivos), teste a porta a partir do cliente com `Test-NetConnection -ComputerName 192.168.0.10 -Port 5050` (PowerShell) e confira se o servidor está rodando (`Servidor ouvindo em 0.0.0.0:5050`).
 
 **O que foi verificado e o que não foi.** Verificado: o servidor em `0.0.0.0` aceitou dois clientes conectados pelo **IP de rede da própria máquina** (não só por `127.0.0.1`) e conduziu a partida. **Não verificado:** conexão entre dois computadores físicos, nem a regra de firewall acima. `Ctrl+C` foi verificado no cliente (esperando o adversário e parado no prompt) e no servidor, em console real no Windows e em pseudo-terminal no Linux. Roteiro curto para concluir: (1) no computador A, `ipconfig` e anote o IPv4; (2) no A, crie a regra de firewall e rode `py -3 servidor.py`; (3) no B, rode `Test-NetConnection -ComputerName <IP do A> -Port 5050` e confirme `TcpTestSucceeded : True`; (4) no B, `py -3 cliente.py <IP do A>` e, no A, `py -3 cliente.py <IP do A>`; (5) jogue até o `FIM` e confira que o servidor mostra `Partida encerrada`.
+
+### 3.5 Interface gráfica (Tkinter)
+
+O `cliente_gui.py` é um cliente alternativo ao `cliente.py`: usa o mesmo protocolo e o mesmo servidor, sem nenhuma alteração neles. Cada jogador escolhe o seu cliente, e **uma partida pode misturar janela e terminal**.
+
+```powershell
+py -3 servidor.py                  # terminal 1: servidor (porta 5050)
+py -3 cliente_gui.py               # jogador 1: janela
+py -3 cliente_gui.py               # jogador 2: outra janela (ou py -3 cliente.py, no terminal)
+```
+
+(Linux/macOS: `python3`.) Opcionalmente, `py -3 cliente_gui.py 192.168.0.10 6000` já preenche o endereço e a porta.
+
+**Como usar**
+
+1. **Tela de conexão.** Informe o endereço do servidor (IP **ou domínio**) e a porta (padrão `5050`) e clique em **Conectar** (ou Enter). Enquanto conecta aparece uma barra de progresso e dá para **Cancelar**; falhas aparecem em vermelho com a causa provável (nome não encontrado, conexão recusada, tempo esgotado, servidor ocupado...).
+2. **Aguardando.** Se você é o primeiro jogador, vai para a tela da partida com "Aguardando outro jogador...". O botão **Sair da partida** já funciona aqui (envia `SAIR`, libera a vaga e volta à tela de conexão).
+3. **Partida.** À esquerda, **Meu tabuleiro** (meus navios e os disparos recebidos); à direita, **Meus disparos**. Colunas **A–E**, linhas **1–5** (B3 = coluna B, linha 3). No alto: "Você é o Jogador N" e de quem é a vez. Só na **sua vez** as casas ainda não atacadas ficam clicáveis; clique para atirar. Depois do clique todas ficam bloqueadas até o servidor responder (`ATUALIZACAO` ou `ERRO`; um `ERRO` aparece em vermelho e libera os cliques). O resultado da última jogada fica em **Mensagens**; abaixo de cada tabuleiro, os navios restantes.
+4. **Fim.** Vitória, derrota ou "o adversário saiu/desconectou" aparecem no painel de status e o botão **Voltar à tela de conexão** é habilitado. O mesmo vale se a conexão com o servidor cair. **Sair da partida** durante o jogo pede confirmação, envia `SAIR` (o adversário recebe `FIM ADVERSARIO_SAIU`) e volta à tela de conexão. Fechar a janela faz o mesmo e libera os recursos de rede.
+
+**Legenda** (cor + símbolo, também mostrada na janela): `?` casa ainda não atacada; `~` água sem disparo (meu tabuleiro); `■` meu navio; `○` tiro na água; `✕` acerto; `✖` golpe que afundou um navio.
+
+**Navios afundados.** O protocolo só informa o `resultado` `AFUNDOU` e a coordenada do disparo, não quais casas formam o navio. Por isso a janela marca (`✖`) apenas a casa do golpe final, mantém as outras casas desse navio como acerto (`✕`) e mostra a contagem de navios restantes (`navios_restantes`) abaixo de cada tabuleiro. As posições ocultas do adversário nunca chegam à janela: ela só desenha o que o servidor envia.
+
+**Conectar por um túnel TCP (Pinggy ou similar).** O túnel só repassa bytes TCP até a porta do servidor, então nada muda no servidor. No computador do servidor, com o servidor rodando na `5050`, abra o túnel e anote o endereço que ele mostra, por exemplo, com o Pinggy:
+
+```powershell
+ssh -p 443 -R0:localhost:5050 tcp@a.pinggy.io
+```
+
+(confira a documentação atual do serviço; o comando e o formato do endereço podem mudar). Ele mostra algo como `tcp://abcde-1-2-3-4.a.free.pinggy.link:43125`. No cliente gráfico, preencha **Endereço** com `abcde-1-2-3-4.a.free.pinggy.link` e **Porta** com `43125`. Colar o endereço inteiro, com `tcp://` e a porta, no campo de endereço também funciona: o prefixo é removido e a porta embutida vale mais que o campo "Porta". O cliente de terminal usa `py -3 cliente.py abcde-1-2-3-4.a.free.pinggy.link 43125`. Se o túnel aceitar a conexão mas o servidor local estiver fora do ar, a janela avisa que o servidor encerrou a conexão sem iniciar a partida. **Não verificado:** a conexão por um túnel real do Pinggy (sem conta e rede externa neste ambiente). Verificados: o formato de endereço `tcp://host:porta` e a conexão por IP/porta em `127.0.0.1`.
 
 ## 4. Por que TCP
 
@@ -455,6 +496,28 @@ O que o cliente faz (linhas da tabela 9.3): conexão TCP com leitor único (`mak
 **Recepção durante a digitação (fase 8).** Antes, o cliente chamava `input()` na mesma thread que lia o socket; se o adversário saísse enquanto o jogador estava no prompt, o `FIM` ficava esperando até ele apertar Enter. Agora a leitura da rede e a do teclado são threads separadas, ligadas à thread principal por uma fila (seção 2.1). O `FIM` encerra o cliente imediatamente. Como a thread do teclado só existe na vez do jogador, **`SAIR` só pode ser digitado na vez dele**; enquanto espera o adversário, a saída é `Ctrl+C`, que envia `SAIR`. Linhas digitadas fora da vez ficam no buffer do terminal e serão lidas no próximo `input()`.
 
 **Encerramento com o teclado ocupado.** Não existe como interromper um `input()` de outra thread. Se o `FIM` chega enquanto a thread do teclado ainda espera uma linha, o `main()` fecha o socket, descarrega a saída e usa `os._exit(0)`: no Linux, com o `stdin` num terminal, a finalização normal do interpretador ficou travada nessa leitura (reproduzido com Python 3.12 e `pty`). No Windows a finalização normal funciona, mas o comportamento é o mesmo nos dois sistemas. Sem leitura pendente (por exemplo, `SAIR` digitado ou `Ctrl+C` fora do prompt), o programa termina normalmente.
+
+### Usando o cliente_gui.py
+
+```
+python cliente_gui.py                     # abre a janela (campos: 127.0.0.1 e 5050)
+python cliente_gui.py 192.168.0.10 6000   # abre a janela com o endereço e a porta preenchidos
+```
+
+Divisão de responsabilidades (a janela **não decide nada**: o servidor valida jogadas, controla turnos e determina resultados):
+
+| Peça | Papel |
+|------|-------|
+| `cliente_gui.py` | Só a interface Tkinter/ttk (tela de conexão, tela da partida, estilos) e o ciclo de vida da janela. |
+| `nucleo_gui.py` · `ModeloPartida` | O que o jogador sabe da partida, atualizado **somente** por `AGUARDE`, `INICIO`, `ATUALIZACAO`, `ERRO` e `FIM` reais. Decide se um clique é aceitável (minha vez, casa não atacada, nenhum disparo pendente) e rejeita mensagens malformadas (`ValueError`, tratado como falha de protocolo). |
+| `nucleo_gui.py` · `Sessao` | Uma conexão: thread que conecta (sem travar a janela) e thread de leitura que usa `receber_mensagem` do `protocolo.py`; o envio usa `enviar_mensagem` com lock. Nunca toca em widgets. |
+| `nucleo_gui.py` · `interpretar_destino` | Valida IP, domínio, porta e o formato de túnel `tcp://host:porta`. |
+
+**Threads.** Conexão e leitura da rede rodam em threads da `Sessao`, que só colocam eventos numa fila (`queue.Queue`). A thread principal do Tkinter consome a fila com `after()` a cada 50 ms e é a única a mexer em widgets. Por isso um `FIM`, um `ERRO` ou a queda do servidor são tratados mesmo com o usuário parado na tela.
+
+**Reconexão.** Cada conexão tem um número de *geração* e cada evento da fila o carrega; ao sair, cancelar ou reconectar a geração muda e os eventos atrasados da conexão anterior (um `FIM`, uma queda) são descartados, sem afetar a nova partida.
+
+**Encerramento.** Diferente do `cliente.py`, a janela não tem `input()` bloqueado, então o `os._exit(0)` descrito acima não é necessário. Vale o que a seção 11 recomenda: um único leitor `makefile("rb")` por conexão, fechado pela própria thread de leitura (no Windows nada desbloqueia uma leitura em curso a partir de outra thread). Quem encerra de fora (Sair, Cancelar, fechar a janela) envia `SAIR` quando cabe e faz `shutdown()` do socket; o servidor percebe e fecha o lado dele, o que termina a leitura. As threads são *daemon*, então nenhuma impede o fim do processo. Ao receber `FIM` o servidor já fecha a conexão; a janela não confunde esse fechamento com queda.
 
 ## 7. Catálogo de mensagens
 
@@ -901,7 +964,7 @@ Cuidados:
 
 ## 12. Testes
 
-A partir da raiz do projeto, para executar **todos** os testes (157, cerca de 7 s no Windows; no Linux o encerramento do servidor em cada teste espera até 0,5 s e a suíte leva mais tempo):
+A partir da raiz do projeto, para executar **todos** os testes (238, cerca de 30 s no Windows com os testes da janela; os 157 originais levam cerca de 7 s; no Linux o encerramento do servidor em cada teste espera até 0,5 s e a suíte leva mais tempo):
 
 ```powershell
 py -3 -m unittest discover -s tests -v          # Windows PowerShell
@@ -933,6 +996,12 @@ python3 -m unittest discover -s tests -p 'test_partida.py' -v
 `tests/test_partida.py` cobre jogador inicial, alternância de turnos, prioridade dos erros, tentativas inválidas sem mudança de estado, visões dos dois jogadores iguais às da seção 10, contagens relativas, cópias das visões e partidas independentes. Exercita partidas completas com vitória de cada jogador, impedimento de novos tiros após o fim e privacidade da frota do vencedor.
 
 `tests/test_cliente.py` testa o `cliente.py` contra um servidor real em `127.0.0.1` e via `socket.socketpair()`. Cobre `AGUARDE`, `INICIO` e transição de turno, desenho dos tabuleiros, `SERVIDOR_CHEIO`, envio de `SAIR`, `ERRO` sem alterar estado, `ATUALIZACAO`, `FIM`, queda de conexão e argumentos de linha de comando.
+
+`tests/test_gui_logica.py` (48 testes, sem janela) cobre a validação de endereço e porta (IP, domínio, `tcp://host:porta`, IPv6, entradas inválidas), as mensagens de erro de conexão, o `ModeloPartida` alimentado com as mensagens reais da seção 10 (vez, bloqueio após o disparo, `ERRO`, `AFUNDOU`, `FIM` de cada tipo, mensagens malformadas e atrasadas) e a `Sessao` contra o servidor real (conectar, `SAIR`, queda, linha inválida, cancelar enquanto conecta, porta recusada).
+
+`tests/test_cliente_gui.py` (33 testes) abre a janela de verdade (oculta) contra o servidor real e a exerce com `Button.invoke()`: campos e erros da tela de conexão, aguardar e sair, clique que envia o disparo e bloqueia a interface até a resposta, alternância dos turnos, casas já atacadas, `ERRO` liberando a interface, afundamento, vitória, derrota, voltar e jogar de novo, adversário que sai ou cai, queda do servidor, confirmação de saída, fechar a janela (envia `SAIR` e encerra a thread de rede), descarte de eventos de conexões anteriores e uma partida completa entre a janela e o `cliente.py` de terminal como processo. É pulado automaticamente sem Tkinter ou sem tela. Os cliques foram simulados por `Button.invoke()` e por eventos sintéticos de mouse; **não** houve clique real com o mouse (ver o roteiro manual abaixo).
+
+**Verificação manual da interface** (o que os testes automáticos não substituem: aparência e mouse reais): (1) `py -3 servidor.py`; (2) `py -3 cliente_gui.py` e conecte; (3) `py -3 cliente.py` em outro terminal; (4) clique nas casas de "Meus disparos" e confira cores, símbolos, legenda e o texto de cada jogada; (5) digite uma coordenada no terminal quando for a vez dele e veja o "Meu tabuleiro" mudar; (6) feche a janela no meio da partida e confirme que o terminal mostra `[FIM] O adversário saiu da partida.`; (7) em uma tela pequena (1366x768) confira que a janela inteira cabe.
 
 (No Windows, se `python` abrir a Microsoft Store, use `py -3`.) Os testes de `tests/test_protocolo.py` usam `socket.socketpair()`: dois sockets reais ligados entre si, sem servidor nem cliente. Cobrem envio e recebimento de uma mensagem, duas mensagens juntas, mensagem em partes (inclusive byte a byte e cortada no meio de um caractere acentuado), JSON inválido e outras linhas inválidas, linha acima do limite, conexão encerrada, envio para conexão encerrada e mensagem interrompida antes da LF.
 
@@ -975,6 +1044,6 @@ Preparação (antes de apresentar): três janelas de terminal lado a lado na rai
 | 2:05 | Abrir um **quarto** terminal: `py -3 cliente.py` | `[ERRO] Já existe uma partida em andamento... (servidor cheio)` e o programa termina; a partida não é afetada. |
 | 2:20 | No terminal do jogador que **não** está na vez: `Ctrl+C` | Esse cliente envia `SAIR`; o outro, **mesmo parado no prompt**, imprime `[FIM] O adversário saiu da partida.` e encerra sozinho. O log do servidor mostra `Partida encerrada (ADVERSARIO_SAIU)`. |
 | 2:40 | Abrir dois clientes de novo | O servidor aceitou outra dupla: partida nova, tabuleiros novos. |
-| 2:50 | Terminal 4: `py -3 -m unittest discover -s tests -v` | `Ran 157 tests ... OK`: protocolo, regras, servidor, cliente e integração com o servidor real. |
+| 2:50 | Terminal 4: `py -3 -m unittest discover -s tests -v` | `Ran 238 tests ... OK`: protocolo, regras, servidor, cliente, integração com o servidor real e interface gráfica. |
 
 Se sobrar tempo, jogue até a vitória: o último disparo gera uma `ATUALIZACAO` e depois o `FIM` (`Você venceu!` / `O jogador N venceu.`), e o servidor fecha as conexões e volta a aceitar outra partida.
