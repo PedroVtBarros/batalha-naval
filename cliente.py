@@ -1,26 +1,26 @@
-"""Cliente da Batalha Naval (fase 4): conecta ao servidor e recebe mensagens.
+"""Cliente da Batalha Naval (fases 4 e 7): conecta ao servidor e joga.
 
 Uso:
-    python cliente.py [endereco_do_servidor] [porta]   # padrão: 127.0.0.1 5050
+    python cliente.py [endereco_do_servidor] [porta]   # padrao: 127.0.0.1 5050
 
-Fase 4 — camada de rede e ciclo de recebimento:
+Fase 4 - camada de rede e ciclo de recebimento:
     - Conecta ao servidor via TCP.
-    - Cria sock.makefile("rb") uma única vez por conexão; fecha leitor e socket
-      no finally, conforme a seção 11 do readme.md.
-    - Mantém a máquina de estados do cliente (seção 9.3):
+    - Cria sock.makefile("rb") uma unica vez por conexao; fecha leitor e socket
+      no finally, conforme a secao 11 do readme.md.
+    - Mantem a maquina de estados do cliente (secao 9.3):
         CONECTADO, MINHA_VEZ, VEZ_ADVERSARIO, ENCERRADO
     - Trata todas as mensagens das fases 1 a 3:
-        AGUARDE, INICIO, ERRO (código decide a ação), FIM.
-    - Aceita ATUALIZACAO (chegará nas fases 5/6) com lógica de exibição.
+        AGUARDE, INICIO, ERRO (codigo decide a acao), FIM.
+    - Aceita ATUALIZACAO (chegara nas fases 5/6) com logica de exibicao.
     - Permite envio de SAIR e trata Ctrl+C, ConexaoEncerrada e MensagemInvalida.
     - Deixa hooks bem definidos para a Fase 7:
-        ao_minha_vez()   — ponto de entrada para leitura de coordenada/SAIR
-        exibir_tabuleiros() — ponto de exibição dos tabuleiros
+        ao_minha_vez()   -- ponto de entrada para leitura de coordenada/SAIR
+        exibir_tabuleiros() -- ponto de exibicao dos tabuleiros
 
-Fase 7 (ainda não implementada): interface completa e loop de disparos.
-O método ao_minha_vez() atualmente apenas retorna None (nenhuma ação),
-sinalizando que o cliente continua aguardando. Substitua-o na Fase 7 pelo
-prompt de coordenada e pelo envio de DISPARAR.
+Fase 7 - interface completa e loop de disparos:
+    ao_minha_vez() le a coordenada digitada pelo jogador, normaliza com
+    strip().upper(), envia DISPARAR ao servidor ou SAIR se o jogador digitar
+    "SAIR". Trata EOFError e KeyboardInterrupt durante o input().
 """
 
 from __future__ import annotations
@@ -112,15 +112,30 @@ class Cliente:
     def ao_minha_vez(self) -> bool | None:
         """Chamado sempre que o estado entra em MINHA_VEZ.
 
-        Fase 4: não faz nada (retorna None).
-        Fase 7: lê a coordenada do jogador, envia DISPARAR ou SAIR e retorna
-                True se quiser encerrar o loop imediatamente (p.ex. após SAIR).
+        Fase 7: le a coordenada digitada pelo jogador, normaliza com
+        strip().upper() e envia DISPARAR ao servidor. Se o jogador
+        digitar "SAIR", chama enviar_sair() e retorna True para encerrar
+        o loop imediatamente.
 
         Retorno:
-            True  → encerra o loop principal agora (usado pela Fase 7 após SAIR).
-            False | None → continua aguardando respostas do servidor.
+            True  -> encerra o loop principal agora (apos SAIR ou EOF).
+            False | None -> continua aguardando respostas do servidor.
         """
-        return None  # Fase 7 substituirá este comportamento
+        try:
+            entrada = input("Sua vez! Digite a coordenada (A1-E5) ou SAIR: ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            self.enviar_sair()
+            return True
+
+        entrada = entrada.strip().upper()
+
+        if entrada == "SAIR":
+            self.enviar_sair()
+            return True
+
+        self.enviar({"tipo": "DISPARAR", "coordenada": entrada})
+        return None
 
     def exibir_tabuleiros(self) -> None:
         """Chamado ao receber INICIO ou ATUALIZACAO com os tabuleiros atualizados.
@@ -151,6 +166,20 @@ class Cliente:
 
     def _loop_recepcao(self) -> None:
         while self.estado != ENCERRADO:
+            # Se é a vez do jogador, lê a entrada antes de esperar o servidor.
+            # Isso garante que ao_minha_vez() seja chamado novamente após um
+            # ERRO (coordenada inválida, repetida etc.) sem precisar receber
+            # outra mensagem primeiro.
+            if self.estado == MINHA_VEZ:
+                encerrar = self.ao_minha_vez()
+                if encerrar:
+                    self.estado = ENCERRADO
+                    return
+                # Após enviar DISPARAR, aguarda a resposta do servidor.
+
+            if self.estado == ENCERRADO:
+                return
+
             try:
                 mensagem = receber_mensagem(self._leitor)
             except MensagemInvalida as erro:
@@ -163,12 +192,6 @@ class Cliente:
                 return
 
             self._despachar(mensagem)
-
-            # Se acabamos de entrar em MINHA_VEZ, chama o hook da Fase 7.
-            if self.estado == MINHA_VEZ:
-                encerrar = self.ao_minha_vez()
-                if encerrar:
-                    self.estado = ENCERRADO
 
     def _despachar(self, mensagem: dict[str, Any]) -> None:
         """Roteia a mensagem recebida para o tratador correto."""
@@ -263,7 +286,7 @@ class Cliente:
         print()
         if motivo == "VITORIA":
             if vencedor == self.jogador:
-                print(f"[FIM] 🎉 Você venceu! {texto}")
+                print(f"[FIM] Você venceu! {texto}")
             else:
                 print(f"[FIM] O jogador {vencedor} venceu. {texto}")
         else:

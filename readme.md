@@ -33,10 +33,10 @@ Este arquivo é a documentação única da aplicação: propósito, funcionament
 | 4 | Cliente: conectar ao servidor e receber mensagens | Ariel | **Implementado** |
 | 5 | Regras da partida: turnos, vitória e visão de cada jogador | Integrante 2 | **Implementado** |
 | 6 | Servidor: integrar as regras, receber disparos e enviar resultados | Integrante 3 | **Implementado** |
-| 7 | Cliente: interface e entrada dos disparos | Ariel | Previsto |
+| 7 | Cliente: interface e entrada dos disparos | Ariel | **Implementado** |
 | 8 | Testes de integração e fechamento da documentação | Pedro | Previsto |
 
-As fases 1 a 6 estão implementadas: protocolo de comunicação, tabuleiro de um jogador, cliente base, regras completas em `partida.py` (turnos, vitória e visão de cada jogador) e servidor que recebe os dois jogadores, processa os disparos com essas regras e envia `ATUALIZACAO` e `FIM`. O servidor já conduz uma partida completa até a vitória. **Ainda não é possível jogar pelo `cliente.py`**: falta a entrada de jogadas no cliente (fase 7). As mensagens, estados e eventos abaixo continuam sendo o contrato.
+As fases 1 a 7 estão implementadas: protocolo de comunicação, tabuleiro de um jogador, cliente base, regras completas em `partida.py` (turnos, vitória e visão de cada jogador), servidor que recebe os dois jogadores, processa os disparos com essas regras e envia `ATUALIZACAO` e `FIM`, e o cliente com interface completa de entrada de coordenadas e envio de `DISPARAR`. O servidor já conduz uma partida completa até a vitória e o cliente lê e envia jogadas pelo terminal. **Falta apenas a fase 8**: testes de integração e fechamento da documentação. As mensagens, estados e eventos abaixo continuam sendo o contrato.
 
 Estrutura atual:
 
@@ -324,7 +324,7 @@ python cliente.py 127.0.0.1 6000   # endereço e porta personalizados
 
 O que já funciona (linhas da tabela 9.3): conexão TCP com leitor único (`makefile("rb")`), transição entre `CONECTADO`, `MINHA_VEZ`, `VEZ_ADVERSARIO` e `ENCERRADO`, exibição de `AGUARDE`, desenho dos dois tabuleiros iniciais ao receber `INICIO`, tratamento de `ATUALIZACAO`, decisão de `ERRO` pelo campo `codigo` (encerrando em `SERVIDOR_CHEIO`), encerramento limpo ao receber `FIM` (`VITORIA`, `ADVERSARIO_SAIU`, `ADVERSARIO_DESCONECTOU`), envio de `SAIR` via `Ctrl+C` e tratamento de queda de conexão (`ConexaoEncerrada` / `MensagemInvalida`).
 
-**Ainda não implementado (fase 7):** a leitura de coordenadas digitadas pelo jogador e o envio de `DISPARAR` no turno (`ao_minha_vez()`).
+**Implementado na Fase 7:** `ao_minha_vez()` lê a coordenada digitada pelo jogador (`input()`), normaliza com `.strip().upper()`, envia `{"tipo": "DISPARAR", "coordenada": entrada}` ao servidor; se o jogador digitar `SAIR`, chama `enviar_sair()` e encerra o loop. `EOFError` e `KeyboardInterrupt` durante o `input()` também encerram via `enviar_sair()`.
 
 ## 7. Catálogo de mensagens
 

@@ -1,17 +1,25 @@
-"""Testes da fase 4: o cliente conecta ao servidor e recebe mensagens.
+"""Testes das fases 4 e 7: o cliente conecta ao servidor e joga.
 
 Cada teste sobe um Servidor real numa porta livre de 127.0.0.1 (igual ao
-padrão de test_servidor.py) e exercita o Cliente contra ele.
+padrao de test_servidor.py) e exercita o Cliente contra ele.
 
-Cobrem:
+Cobrem (fase 4):
     - Recebimento de AGUARDE (primeiro jogador)
     - Recebimento de INICIO (cada jogador com seus campos)
     - Tratamento de SERVIDOR_CHEIO (terceiro cliente encerra o estado)
     - Envio de SAIR e encerramento limpo (da perspectiva do cliente)
     - Tratamento de ERRO PARTIDA_NAO_INICIADA sem mudar o estado
-    - ConexaoEncerrada quando o servidor fecha a conexão
+    - ConexaoEncerrada quando o servidor fecha a conexao
     - Leitura limpa de ATUALIZACAO (stubbada via servidor simulado)
     - Leitura limpa de FIM (stubbada via servidor simulado)
+
+Cobrem (fase 7 -- ao_minha_vez):
+    - Disparo valido: ao_minha_vez() envia DISPARAR com a coordenada digitada
+    - Coordenada invalida/repetida seguida de nova tentativa bem-sucedida
+    - Comando SAIR digitado encerra o loop e notifica o servidor
+    - EOFError durante o input() encerra o loop via enviar_sair()
+    - Partida completa com vitoria propria
+    - Partida completa com derrota
 
 Executar a partir da raiz do projeto:
     python -m unittest discover -s tests -v
@@ -24,6 +32,7 @@ import time
 import unittest
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -628,5 +637,297 @@ class TestMain(unittest.TestCase):
         self.assertEqual(main(["127.0.0.1", str(porta_livre)]), 1)
 
 
+# ---------------------------------------------------------------------------
+# Testes: ao_minha_vez() — Fase 7
+# ---------------------------------------------------------------------------
+
+class TestAoMinhaVez(unittest.TestCase):
+    """Testes unitarios de ao_minha_vez() usando ServidorSimulado e mock de input()."""
+
+    def setUp(self):
+        self.sim = ServidorSimulado()
+        self.addCleanup(self.sim.fechar)
+
+    def _aceitar_em_thread(self):
+        t = threading.Thread(target=self.sim.aceitar, daemon=True)
+        t.start()
+        return t
+
+    def _criar_cliente(self) -> Cliente:
+        t = self._aceitar_em_thread()
+        c = conectar("127.0.0.1", self.sim.porta)
+        t.join(5)
+        c.jogador = 1
+        return c
+
+    def test_disparo_valido_envia_disparar(self):
+        """Digitar uma coordenada valida envia {'tipo': 'DISPARAR', 'coordenada': 'B3'}."""
+        cliente = self._criar_cliente()
+        with patch("builtins.input", return_value="b3"):
+            resultado = cliente.ao_minha_vez()
+
+        self.assertIsNone(resultado)  # nao encerra o loop
+        mensagem = self.sim.receber()
+        self.assertEqual(mensagem["tipo"], "DISPARAR")
+        self.assertEqual(mensagem["coordenada"], "B3")  # normalizado para maiusculo
+        cliente._fechar()
+
+    def test_disparo_normaliza_minusculas(self):
+        """Entrada em minusculas deve ser normalizada para maiusculas antes do envio."""
+        cliente = self._criar_cliente()
+        with patch("builtins.input", return_value="  a1  "):
+            cliente.ao_minha_vez()
+
+        mensagem = self.sim.receber()
+        self.assertEqual(mensagem["coordenada"], "A1")
+        cliente._fechar()
+
+    def test_sair_digitado_encerra_loop(self):
+        """Digitar 'SAIR' deve chamar enviar_sair() e retornar True."""
+        cliente = self._criar_cliente()
+        with patch("builtins.input", return_value="SAIR"):
+            resultado = cliente.ao_minha_vez()
+
+        self.assertTrue(resultado)
+        self.assertEqual(cliente.estado, ENCERRADO)
+        # O servidor deve receber a mensagem SAIR
+        mensagem = self.sim.receber()
+        self.assertEqual(mensagem["tipo"], "SAIR")
+        cliente._fechar()
+
+    def test_sair_minusculo_tambem_encerra(self):
+        """'sair' (minusculo) tambem deve acionar o encerramento apos normalizacao."""
+        cliente = self._criar_cliente()
+        with patch("builtins.input", return_value="sair"):
+            resultado = cliente.ao_minha_vez()
+
+        self.assertTrue(resultado)
+        self.assertEqual(cliente.estado, ENCERRADO)
+        cliente._fechar()
+
+    def test_eoferror_encerra_loop(self):
+        """EOFError durante o input() deve enviar SAIR e retornar True."""
+        cliente = self._criar_cliente()
+        with patch("builtins.input", side_effect=EOFError):
+            resultado = cliente.ao_minha_vez()
+
+        self.assertTrue(resultado)
+        self.assertEqual(cliente.estado, ENCERRADO)
+        mensagem = self.sim.receber()
+        self.assertEqual(mensagem["tipo"], "SAIR")
+        cliente._fechar()
+
+    def test_keyboardinterrupt_encerra_loop(self):
+        """KeyboardInterrupt durante o input() deve enviar SAIR e retornar True."""
+        cliente = self._criar_cliente()
+        with patch("builtins.input", side_effect=KeyboardInterrupt):
+            resultado = cliente.ao_minha_vez()
+
+        self.assertTrue(resultado)
+        self.assertEqual(cliente.estado, ENCERRADO)
+        cliente._fechar()
+
+
+# ---------------------------------------------------------------------------
+# Testes: partida completa via loop executar() — Fase 7
+# ---------------------------------------------------------------------------
+
+class TestPartidaCompleta(BaseCliente):
+    """Exercita o loop executar() com ao_minha_vez() real (mockando input())."""
+
+    # ------------------------------------------------------------------
+    # Helpers internos
+    # ------------------------------------------------------------------
+
+    def _conectar_partida(self):
+        """
+        Conecta o Cliente real (jogador 1) e um raw (jogador 2).
+        NAO consome nenhuma mensagem do cliente — o loop executar() fara isso.
+        O raw consome AGUARDE e INICIO proprios para liberar o servidor.
+        Devolve (cliente, j2_raw).
+        """
+        cliente = self.conectar_cliente()
+
+        j2_raw = self.conectar_raw()
+        self._registrar(j2_raw)
+
+        # O raw precisa consumir seu INICIO para o servidor avancar para VEZ_J1,
+        # mas nao tocamos no leitor do cliente — o loop cuidara disso.
+        self.esperar_estado_servidor(VEZ_J1)
+        j2_raw.receber()  # INICIO do jogador 2 (descartamos aqui)
+        return cliente, j2_raw
+
+    def _esperar_estado_cliente(self, cliente: Cliente, esperado: str, timeout: float = 5.0):
+        limite = time.monotonic() + timeout
+        while time.monotonic() < limite:
+            if cliente.estado == esperado:
+                return
+            time.sleep(0.01)
+        self.fail(f"estado do cliente {cliente.estado!r}, esperado {esperado!r}")
+
+    # ------------------------------------------------------------------
+    # Testes
+    # ------------------------------------------------------------------
+
+    def test_disparo_valido_enviado_e_atualizacao_recebida(self):
+        """
+        O cliente envia DISPARAR com a coordenada digitada e depois recebe
+        ATUALIZACAO do servidor — transitando para VEZ_ADVERSARIO.
+        """
+        cliente, j2_raw = self._conectar_partida()
+
+        # Fila de entradas: um unico disparo valido, depois bloqueia o loop
+        entradas = iter(["B3"])
+
+        def input_mock(prompt=""):
+            try:
+                return next(entradas)
+            except StopIteration:
+                # Encerra o loop apos o primeiro disparo (via SAIR simulado)
+                raise EOFError
+
+        with patch("builtins.input", side_effect=input_mock):
+            t = self._executar_cliente_em_thread(cliente)
+            # Aguarda o cliente entrar em VEZ_ADVERSARIO apos receber ATUALIZACAO
+            self._esperar_estado_cliente(cliente, VEZ_ADVERSARIO)
+
+        # Encerra o servidor para liberar o loop restante
+        self.servidor.encerrar()
+        t.join(timeout=5)
+
+        self.assertEqual(cliente.estado, ENCERRADO)
+
+    def test_erro_coordenada_invalida_nova_tentativa(self):
+        """
+        Apos receber ERRO COORDENADA_INVALIDA, o estado permanece MINHA_VEZ
+        e ao_minha_vez() e chamado de novo para nova tentativa.
+        """
+        cliente, j2_raw = self._conectar_partida()
+
+        # Primeira entrada: coordenada invalida; segunda: valida
+        entradas = iter(["ZZ", "A1"])
+
+        def input_mock(prompt=""):
+            try:
+                return next(entradas)
+            except StopIteration:
+                raise EOFError
+
+        with patch("builtins.input", side_effect=input_mock):
+            t = self._executar_cliente_em_thread(cliente)
+            # Aguarda transicao para VEZ_ADVERSARIO (disparo valido processado)
+            self._esperar_estado_cliente(cliente, VEZ_ADVERSARIO)
+
+        self.servidor.encerrar()
+        t.join(timeout=5)
+        self.assertEqual(cliente.estado, ENCERRADO)
+
+    def test_sair_digitado_durante_partida_encerra_cliente(self):
+        """
+        Digitar 'SAIR' na vez do jogador envia SAIR ao servidor e encerra o loop.
+        O adversario deve receber FIM ADVERSARIO_SAIU.
+        """
+        cliente, j2_raw = self._conectar_partida()
+
+        with patch("builtins.input", return_value="SAIR"):
+            t = self._executar_cliente_em_thread(cliente)
+            t.join(timeout=5)
+
+        self.assertFalse(t.is_alive(), "loop nao encerrou apos SAIR")
+        self.assertEqual(cliente.estado, ENCERRADO)
+
+        # O adversario deve receber FIM
+        fim = j2_raw.receber()
+        self.assertEqual(fim["tipo"], "FIM")
+        self.assertEqual(fim["motivo"], "ADVERSARIO_SAIU")
+
+    def test_vitoria_propria_encerra_loop(self):
+        """
+        Partida completa com 4 disparos do jogador 1 que afundam os dois navios
+        do jogador 2 (D1-E1 e B3-B4). O cliente deve transitar para ENCERRADO
+        e a mensagem de FIM deve indicar vitoria do jogador 1.
+        """
+        cliente, j2_raw = self._conectar_partida()
+
+        # Jogadas vencedoras do jogador 1 contra o jogador 2 (navios D1-E1 e B3-B4)
+        # Intercalamos com jogadas do jogador 2 (C1, C2, C3 — agua)
+        jogadas_j1 = iter(["D1", "E1", "B3", "B4"])
+
+        def input_mock(prompt=""):
+            try:
+                return next(jogadas_j1)
+            except StopIteration:
+                raise EOFError
+
+        with patch("builtins.input", side_effect=input_mock):
+            t = self._executar_cliente_em_thread(cliente)
+
+            # Jogador 2 (raw) responde nas suas vezes com jogadas na agua
+            jogadas_j2 = ["C1", "C2", "C3"]
+            for coord in jogadas_j2:
+                # Aguarda e consome a ATUALIZACAO do disparo do jogador 1
+                msg_j1 = j2_raw.receber()
+                self.assertEqual(msg_j1["tipo"], "ATUALIZACAO")
+                self.assertEqual(msg_j1["atirador"], 1)
+
+                # Jogador 2 dispara
+                j2_raw.enviar({"tipo": "DISPARAR", "coordenada": coord})
+                msg_j2 = j2_raw.receber()
+                self.assertEqual(msg_j2["tipo"], "ATUALIZACAO")
+                self.assertEqual(msg_j2["atirador"], 2)
+
+            # Ultimo disparo do jogador 1 afunda o ultimo navio e encerra a partida
+            msg_final = j2_raw.receber()
+            self.assertEqual(msg_final["tipo"], "ATUALIZACAO")
+            self.assertEqual(msg_final["resultado"], "AFUNDOU")
+            fim_j2 = j2_raw.receber()
+            self.assertEqual(fim_j2["tipo"], "FIM")
+            self.assertEqual(fim_j2["vencedor"], 1)
+
+            t.join(timeout=5)
+
+        self.assertFalse(t.is_alive(), "loop nao encerrou apos FIM de vitoria")
+        self.assertEqual(cliente.estado, ENCERRADO)
+
+    def test_derrota_encerra_loop(self):
+        """
+        O jogador 2 (raw) afunda os navios do jogador 1 (A1-B1 e D4-D5).
+        O cliente (jogador 1) deve transitar para ENCERRADO ao receber FIM.
+        """
+        cliente, j2_raw = self._conectar_partida()
+
+        # Jogador 1 atira sempre na agua (nao afunda ninguem)
+        jogadas_j1 = iter(["C3", "C4", "C5", "C2"])
+
+        def input_mock(prompt=""):
+            try:
+                return next(jogadas_j1)
+            except StopIteration:
+                raise EOFError
+
+        with patch("builtins.input", side_effect=input_mock):
+            t = self._executar_cliente_em_thread(cliente)
+
+            # Alterna: j1 atira na agua, j2 atira vencendo
+            for coord_j2 in ["A1", "B1", "D4", "D5"]:
+                # Aguarda e consome a ATUALIZACAO do disparo do jogador 1
+                msg_j1 = j2_raw.receber()
+                self.assertEqual(msg_j1["tipo"], "ATUALIZACAO")
+                self.assertEqual(msg_j1["atirador"], 1)
+
+                # Jogador 2 dispara acertando
+                j2_raw.enviar({"tipo": "DISPARAR", "coordenada": coord_j2})
+                msg_j2 = j2_raw.receber()
+                self.assertEqual(msg_j2["tipo"], "ATUALIZACAO")
+                self.assertEqual(msg_j2["atirador"], 2)
+
+            fim_j2 = j2_raw.receber()
+            self.assertEqual(fim_j2["tipo"], "FIM")
+            self.assertEqual(fim_j2["vencedor"], 2)
+
+            t.join(timeout=5)
+
+        self.assertFalse(t.is_alive(), "loop nao encerrou apos derrota")
+        self.assertEqual(cliente.estado, ENCERRADO)
 if __name__ == "__main__":
     unittest.main()
