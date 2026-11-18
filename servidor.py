@@ -1,21 +1,26 @@
-"""Servidor da Batalha Naval (fase 3): recebe os dois jogadores e inicia a partida.
+"""Servidor da Batalha Naval (fases 3 e 6): recebe os jogadores e conduz a partida.
 
 Uso:
     python servidor.py [porta]          # porta padrão: 5050
 
-O que esta fase faz (linhas da tabela 9.2 do readme.md):
+O que o servidor faz (linhas da tabela 9.2 do readme.md):
 
     1   primeiro cliente conecta            -> jogador 1, recebe AGUARDE
     2   segundo cliente conecta             -> jogador 2, os dois recebem INICIO
     3   DISPARAR enquanto aguarda           -> ERRO PARTIDA_NAO_INICIADA
     4/5 jogador 1 sai/cai enquanto aguarda  -> volta a SEM_JOGADORES, sem avisar ninguém
+    6   disparo válido                      -> ATUALIZACAO aos dois, passa a vez
+    7   disparo que afunda o último navio   -> ATUALIZACAO aos dois, FIM VITORIA aos dois
+    8   coordenada inválida ou repetida     -> ERRO COORDENADA_INVALIDA / DISPARO_REPETIDO
+    9   DISPARAR fora da vez                -> ERRO FORA_DE_VEZ
     10  linha inválida / tipo não permitido -> ERRO MENSAGEM_INVALIDA / TIPO_DESCONHECIDO
     11  SAIR durante a partida              -> FIM ADVERSARIO_SAIU ao outro
     12  desconexão durante a partida        -> FIM ADVERSARIO_DESCONECTOU ao outro
     13  terceiro cliente conecta            -> ERRO SERVIDOR_CHEIO e fecha a conexão dele
 
-O processamento de um DISPARAR durante a partida (turnos, resultado, ATUALIZACAO e
-vitória) fica para as fases 5 e 6: ver Servidor._disparo_em_partida.
+As regras do jogo (turnos, resultado do disparo, vitória e visão de cada jogador)
+ficam em partida.py (fase 5). O servidor (fase 6) só decide QUEM fez o pedido,
+chama Partida.disparar e envia a cada jogador a sua versão do resultado.
 
 Modelo de concorrência:
 
@@ -42,7 +47,8 @@ from protocolo import (
     enviar_mensagem,
     receber_mensagem,
 )
-from tabuleiro import Tabuleiro
+from partida import ForaDeVez, Partida
+from tabuleiro import CoordenadaInvalida, DisparoRepetido, Tabuleiro
 
 PORTA_PADRAO = 5050
 
@@ -53,8 +59,8 @@ AGUARDANDO_SEGUNDO = "AGUARDANDO_SEGUNDO"
 VEZ_J1 = "VEZ_J1"
 VEZ_J2 = "VEZ_J2"
 
-TABULEIRO_DESCONHECIDO = ["~~~~~"] * 5
-TIPOS_DO_CLIENTE = {"DISPARAR", "SAIR"}
+CAMPOS_INICIO = ("sua_vez", "tabuleiro_proprio", "tabuleiro_adversario")
+ERROS_DE_DISPARO = (ForaDeVez, CoordenadaInvalida, DisparoRepetido)
 
 log = logging.getLogger("servidor")
 
@@ -134,7 +140,7 @@ class Servidor:
         self._lock = threading.Lock()  # protege tudo abaixo
         self._estado = SEM_JOGADORES
         self._jogadores: dict[int, Conexao] = {}
-        self._tabuleiros: dict[int, Tabuleiro] = {}
+        self._partida: Partida | None = None  # existe só em VEZ_J1 / VEZ_J2
         self._socket_escuta: socket.socket | None = None
         self._rodando = threading.Event()
 
@@ -228,14 +234,14 @@ class Servidor:
         """Linha 2. Chamado com self._lock adquirido."""
         jogador_1 = self._jogadores[1]
         conexao.numero = 2
-        self._tabuleiros = {1: self._criar_tabuleiro(), 2: self._criar_tabuleiro()}
+        self._partida = Partida(self._criar_tabuleiro(), self._criar_tabuleiro())
 
         if not jogador_1.enviar(self._mensagem_inicio(1)):
             # Observação da seção 9.2: o jogador 1 caiu antes do início. A partida
             # não começa; quem acabou de chegar passa a ser o jogador 1.
             log.info("%s caiu antes do início; %s vira jogador 1", jogador_1, conexao.endereco)
             jogador_1.fechar()
-            self._tabuleiros = {}
+            self._partida = None
             self._registrar_jogador_1(conexao)
             return
 
@@ -248,13 +254,9 @@ class Servidor:
             log.info("Falha ao enviar INICIO a %s", conexao)
 
     def _mensagem_inicio(self, numero: int) -> dict[str, Any]:
-        return {
-            "tipo": "INICIO",
-            "jogador": numero,
-            "sua_vez": numero == 1,
-            "tabuleiro_proprio": self._tabuleiros[numero].como_lista(),
-            "tabuleiro_adversario": list(TABULEIRO_DESCONHECIDO),
-        }
+        assert self._partida is not None
+        visao = self._partida.visao(numero)
+        return {"tipo": "INICIO", "jogador": numero, **{c: visao[c] for c in CAMPOS_INICIO}}
 
     def _ler_conexao(self, conexao: Conexao) -> None:
         """Thread de uma conexão: lê mensagens até a conexão acabar."""
@@ -304,12 +306,53 @@ class Servidor:
     def _disparo_em_partida(self, conexao: Conexao, mensagem: dict[str, Any]) -> None:
         """DISPARAR com a partida em andamento (linhas 6 a 9). Chamado com self._lock.
 
-        A implementar nas fases 5 (regras) e 6 (integração): verificar a vez
-        (FORA_DE_VEZ), aplicar o disparo no tabuleiro do adversário, enviar
-        ATUALIZACAO aos dois e, em caso de vitória, FIM VITORIA e encerrar.
-        Por enquanto o disparo é apenas registrado no log e nada é enviado.
+        A ordem de verificação da seção 8 (vez, coordenada, repetição) é feita
+        por Partida.disparar; a partida iniciada já foi verificada pelo chamador.
+        O número do atirador vem da conexão, nunca de um campo da mensagem.
         """
-        log.info("%s disparou %r (processamento previsto para a fase 6)", conexao, mensagem.get("coordenada"))
+        assert self._partida is not None and conexao.numero is not None
+        atirador = conexao.numero
+        coordenada = mensagem.get("coordenada")
+        try:
+            resultado = self._partida.disparar(atirador, coordenada)
+        except ERROS_DE_DISPARO as erro:
+            # Linhas 8 e 9: ERRO só para quem tentou; tabuleiros e vez inalterados.
+            log.info("%s disparou %r: %s", conexao, coordenada, erro.codigo)
+            self._enviar_erro(conexao, erro.codigo, str(erro))
+            return
+
+        log.info("%s disparou %s: %s", conexao, coordenada, resultado)
+        # Linhas 6 e 7: cada jogador recebe a SUA visão do mesmo disparo.
+        for numero, jogador in self._jogadores.items():
+            jogador.enviar(
+                {
+                    "tipo": "ATUALIZACAO",
+                    "atirador": atirador,
+                    "coordenada": coordenada,
+                    "resultado": resultado,
+                    **self._partida.visao(numero),
+                }
+            )
+
+        if not self._partida.encerrada:
+            self._estado = VEZ_J1 if self._partida.vez == 1 else VEZ_J2
+            return
+
+        # Linha 7: vitória. FIM depois da última ATUALIZACAO, aos dois; fecha tudo.
+        vencedor = self._partida.vencedor
+        log.info("Partida encerrada (VITORIA): jogador %s venceu", vencedor)
+        fim = {
+            "tipo": "FIM",
+            "motivo": "VITORIA",
+            "vencedor": vencedor,
+            "mensagem": f"Jogador {vencedor} afundou todos os navios do adversário.",
+        }
+        jogadores = list(self._jogadores.values())
+        for jogador in jogadores:
+            jogador.enviar(fim)
+        for jogador in jogadores:
+            jogador.fechar()
+        self._resetar()
 
     def _ao_sair(self, conexao: Conexao) -> None:
         log.info("%s enviou SAIR", conexao)
@@ -349,7 +392,7 @@ class Servidor:
         """Volta a SEM_JOGADORES (ENCERRADA é transitório). Chamado com self._lock."""
         self._estado = SEM_JOGADORES
         self._jogadores = {}
-        self._tabuleiros = {}
+        self._partida = None
 
     @staticmethod
     def _enviar_erro(conexao: Conexao, codigo: str, texto: str) -> None:

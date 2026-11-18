@@ -1,7 +1,7 @@
-"""Testes da fase 3: o servidor recebe os dois jogadores e inicia a partida.
+"""Testes das fases 3 e 6: o servidor recebe os jogadores e conduz a partida.
 
 Cada teste sobe um Servidor real numa porta livre de 127.0.0.1 e conecta
-clientes TCP de verdade, usando o protocolo.py. Cobrem as linhas 1 a 5 e 10 a 13
+clientes TCP de verdade, usando o protocolo.py. Cobrem todas as linhas (1 a 13)
 da tabela 9.2 do readme.md.
 
 Executar a partir da raiz do projeto:
@@ -22,6 +22,7 @@ from servidor import (  # noqa: E402
     AGUARDANDO_SEGUNDO,
     SEM_JOGADORES,
     VEZ_J1,
+    VEZ_J2,
     Servidor,
 )
 from tabuleiro import Tabuleiro  # noqa: E402
@@ -250,6 +251,187 @@ class TestDuranteAPartida(BaseServidor):
         # j1 não recebeu nada: a próxima mensagem dele é a resposta ao próprio pedido.
         j1.enviar({"tipo": "OLA"})
         self.assertEqual(j1.receber()["codigo"], "TIPO_DESCONHECIDO")
+
+
+class TestDisparos(BaseServidor):
+    """Fase 6: linhas 6 a 9 da tabela 9.2 (navios da seção 10 do readme.md)."""
+
+    def disparar(self, cliente, coordenada):
+        cliente.enviar({"tipo": "DISPARAR", "coordenada": coordenada})
+
+    def receber_atualizacoes(self, j1, j2):
+        a1, a2 = j1.receber(), j2.receber()
+        self.assertEqual((a1["tipo"], a2["tipo"]), ("ATUALIZACAO", "ATUALIZACAO"))
+        for atualizacao in (a1, a2):
+            self.assertNotIn("N", "".join(atualizacao["tabuleiro_adversario"]))
+        return a1, a2
+
+    def test_turno_completo_da_secao_10(self):
+        j1, j2 = self.iniciar_partida()
+        self.disparar(j1, "B3")
+        a1, a2 = self.receber_atualizacoes(j1, j2)
+        self.assertEqual(
+            a1,
+            {
+                "tipo": "ATUALIZACAO",
+                "atirador": 1,
+                "coordenada": "B3",
+                "resultado": "ACERTO",
+                "sua_vez": False,
+                "tabuleiro_proprio": ["NN~~~", "~~~~~", "~~~~~", "~~~N~", "~~~N~"],
+                "tabuleiro_adversario": ["~~~~~", "~~~~~", "~X~~~", "~~~~~", "~~~~~"],
+                "navios_restantes": {"proprio": 2, "adversario": 2},
+            },
+        )
+        self.assertEqual(
+            a2,
+            {
+                "tipo": "ATUALIZACAO",
+                "atirador": 1,
+                "coordenada": "B3",
+                "resultado": "ACERTO",
+                "sua_vez": True,
+                "tabuleiro_proprio": ["~~~NN", "~~~~~", "~X~~~", "~N~~~", "~~~~~"],
+                "tabuleiro_adversario": VAZIO,
+                "navios_restantes": {"proprio": 2, "adversario": 2},
+            },
+        )
+        self.esperar_estado(VEZ_J2)
+
+    def test_disparo_fora_da_vez_gera_erro_so_para_quem_tentou(self):
+        j1, j2 = self.iniciar_partida()
+        self.disparar(j2, "A1")
+        self.assertEqual(j2.receber()["codigo"], "FORA_DE_VEZ")
+        # FORA_DE_VEZ vem antes da validação da coordenada (seção 8).
+        self.disparar(j2, "Z9")
+        self.assertEqual(j2.receber()["codigo"], "FORA_DE_VEZ")
+        self.esperar_estado(VEZ_J1)
+        # j1 não recebeu nada: a próxima mensagem dele é a do próprio disparo.
+        self.disparar(j1, "C3")
+        a1, _ = self.receber_atualizacoes(j1, j2)
+        self.assertEqual((a1["coordenada"], a1["resultado"]), ("C3", "AGUA"))
+
+    def test_coordenadas_invalidas_nao_mudam_a_vez(self):
+        j1, j2 = self.iniciar_partida()
+        for mensagem in (
+            {"tipo": "DISPARAR", "coordenada": "Z9"},
+            {"tipo": "DISPARAR", "coordenada": "b3"},
+            {"tipo": "DISPARAR", "coordenada": "B10"},
+            {"tipo": "DISPARAR", "coordenada": 7},
+            {"tipo": "DISPARAR"},
+        ):
+            with self.subTest(mensagem=mensagem):
+                j1.enviar(mensagem)
+                erro = j1.receber()
+                self.assertEqual(erro["codigo"], "COORDENADA_INVALIDA")
+                self.assertEqual(erro["mensagem"], "Coordenada inválida. Use de A1 a E5.")
+        self.esperar_estado(VEZ_J1)
+        self.disparar(j1, "B3")
+        a1, a2 = self.receber_atualizacoes(j1, j2)
+        self.assertEqual(a1["resultado"], "ACERTO")  # tabuleiro não foi alterado
+
+    def test_disparo_repetido(self):
+        j1, j2 = self.iniciar_partida()
+        self.disparar(j1, "B3")
+        self.receber_atualizacoes(j1, j2)
+        self.disparar(j2, "C3")
+        self.receber_atualizacoes(j1, j2)
+        self.disparar(j1, "B3")
+        erro = j1.receber()
+        self.assertEqual(erro["codigo"], "DISPARO_REPETIDO")
+        self.assertEqual(erro["mensagem"], "Você já atirou em B3.")
+        self.esperar_estado(VEZ_J1)
+
+    def test_mesma_coordenada_nos_dois_tabuleiros_nao_e_repetida(self):
+        j1, j2 = self.iniciar_partida()
+        self.disparar(j1, "C3")
+        self.receber_atualizacoes(j1, j2)
+        self.disparar(j2, "C3")  # C3 no tabuleiro do jogador 1: primeira vez
+        a1, a2 = self.receber_atualizacoes(j1, j2)
+        self.assertEqual((a2["atirador"], a2["resultado"]), (2, "AGUA"))
+
+    def jogar(self, j1, j2, jogadas):
+        """Executa (atirador, coordenada, resultado esperado) e devolve a última dupla."""
+        clientes = {1: j1, 2: j2}
+        for atirador, coordenada, esperado in jogadas:
+            self.disparar(clientes[atirador], coordenada)
+            a1, a2 = self.receber_atualizacoes(j1, j2)
+            for atualizacao in (a1, a2):
+                self.assertEqual(
+                    (atualizacao["atirador"], atualizacao["coordenada"], atualizacao["resultado"]),
+                    (atirador, coordenada, esperado),
+                )
+        return a1, a2
+
+    def test_partida_completa_com_vitoria_do_jogador_1(self):
+        j1, j2 = self.iniciar_partida()
+        a1, a2 = self.jogar(
+            j1,
+            j2,
+            [
+                (1, "D1", "ACERTO"), (2, "C1", "AGUA"),
+                (1, "E1", "AFUNDOU"), (2, "C2", "AGUA"),
+                (1, "B3", "ACERTO"), (2, "C3", "AGUA"),
+                (1, "B4", "AFUNDOU"),
+            ],
+        )
+        self.assertEqual((a1["sua_vez"], a2["sua_vez"]), (False, False))
+        self.assertEqual(a1["navios_restantes"], {"proprio": 2, "adversario": 0})
+        self.assertEqual(a2["navios_restantes"], {"proprio": 0, "adversario": 2})
+        self.assertEqual(a1["tabuleiro_adversario"], ["~~~XX", "~~~~~", "~X~~~", "~X~~~", "~~~~~"])
+        self.assertEqual(a2["tabuleiro_adversario"], ["~~O~~", "~~O~~", "~~O~~", "~~~~~", "~~~~~"])
+        fim = {
+            "tipo": "FIM",
+            "motivo": "VITORIA",
+            "vencedor": 1,
+            "mensagem": "Jogador 1 afundou todos os navios do adversário.",
+        }
+        self.assertEqual(j1.receber(), fim)
+        self.assertEqual(j2.receber(), fim)
+        j1.esperar_fechamento(self)
+        j2.esperar_fechamento(self)
+        self.esperar_estado(SEM_JOGADORES)
+
+    def test_vitoria_do_jogador_2(self):
+        j1, j2 = self.iniciar_partida()
+        self.jogar(
+            j1,
+            j2,
+            [
+                (1, "A5", "AGUA"), (2, "A1", "ACERTO"),
+                (1, "B5", "AGUA"), (2, "B1", "AFUNDOU"),
+                (1, "C5", "AGUA"), (2, "D4", "ACERTO"),
+                (1, "E5", "AGUA"), (2, "D5", "AFUNDOU"),
+            ],
+        )
+        for cliente in (j1, j2):
+            fim = cliente.receber()
+            self.assertEqual((fim["motivo"], fim["vencedor"]), ("VITORIA", 2))
+            cliente.esperar_fechamento(self)
+
+    def test_nova_partida_depois_de_uma_vitoria_comeca_do_zero(self):
+        j1, j2 = self.iniciar_partida()
+        self.jogar(
+            j1,
+            j2,
+            [(1, "D1", "ACERTO"), (2, "C1", "AGUA"), (1, "E1", "AFUNDOU"),
+             (2, "C2", "AGUA"), (1, "B3", "ACERTO"), (2, "C3", "AGUA"), (1, "B4", "AFUNDOU")],
+        )
+        j1.receber()
+        j2.receber()
+        self.esperar_estado(SEM_JOGADORES)
+        n1, n2 = self.iniciar_partida()
+        self.disparar(n1, "D1")  # mesma casa da partida anterior: não é repetida
+        a1, _ = self.receber_atualizacoes(n1, n2)
+        self.assertEqual(a1["resultado"], "ACERTO")
+        self.assertEqual(a1["navios_restantes"], {"proprio": 2, "adversario": 2})
+
+    def test_sair_no_meio_da_partida_com_disparos(self):
+        j1, j2 = self.iniciar_partida()
+        self.jogar(j1, j2, [(1, "D1", "ACERTO")])
+        j2.enviar({"tipo": "SAIR"})
+        self.assertEqual(j1.receber()["motivo"], "ADVERSARIO_SAIU")
+        self.esperar_estado(SEM_JOGADORES)
 
 
 if __name__ == "__main__":
