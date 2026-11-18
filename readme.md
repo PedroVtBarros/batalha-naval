@@ -30,13 +30,13 @@ Este arquivo é a documentação única da aplicação: propósito, funcionament
 | 1 | Protocolo: `protocolo.py`, este `readme.md` e `tests/test_protocolo.py` | Pedro | **Implementado** |
 | 2 | Tabuleiro: criar, posicionar navios e verificar disparos | Integrante 2 | **Implementado** |
 | 3 | Servidor: aceitar os dois jogadores e aguardar o segundo | Integrante 3 | **Implementado** |
-| 4 | Cliente: conectar ao servidor e receber mensagens | Integrante 4 | Previsto |
+| 4 | Cliente: conectar ao servidor e receber mensagens | Ariel | **Implementado** |
 | 5 | Regras da partida: turnos, vitória e visão de cada jogador | Integrante 2 | Previsto |
 | 6 | Servidor: integrar as regras, receber disparos e enviar resultados | Integrante 3 | Previsto |
-| 7 | Cliente: interface e entrada dos disparos | Integrante 4 | Previsto |
+| 7 | Cliente: interface e entrada dos disparos | Ariel | Previsto |
 | 8 | Testes de integração e fechamento da documentação | Pedro | Previsto |
 
-As fases 1, 2 e 3 estão implementadas: protocolo de comunicação, tabuleiro de um jogador e servidor que recebe os dois jogadores e inicia a partida. **Ainda não é possível disputar uma partida**: faltam o cliente e o processamento dos disparos (turnos, resultado, vitória e visão de cada jogador). As mensagens, estados e eventos abaixo são o contrato para as próximas fases. O nome `cliente.py` continua sendo sugestão para o responsável.
+As fases 1, 2, 3 e 4 estão implementadas: protocolo de comunicação, tabuleiro de um jogador, servidor que recebe os dois jogadores e cliente base que conecta e recebe as mensagens. **Ainda não é possível disputar uma partida**: faltam o processamento dos disparos no servidor (turnos, resultado, vitória e visão de cada jogador) e a entrada de jogadas no cliente. As mensagens, estados e eventos abaixo são o contrato para as próximas fases.
 
 Estrutura atual:
 
@@ -46,10 +46,12 @@ Estrutura atual:
 ├── protocolo.py               envio e recebimento de mensagens (compartilhado)
 ├── tabuleiro.py               navios e disparos recebidos por um jogador
 ├── servidor.py                servidor TCP: recebe os jogadores e conduz a partida
+├── cliente.py                 cliente TCP: conecta ao servidor e recebe mensagens
 └── tests/
     ├── test_protocolo.py      testes do protocolo.py
     ├── test_servidor.py       testes do servidor.py
-    └── test_tabuleiro.py      testes do tabuleiro.py
+    ├── test_tabuleiro.py      testes do tabuleiro.py
+    └── test_cliente.py        testes do cliente.py
 ```
 
 ## 2. Propósito e funcionamento
@@ -93,7 +95,7 @@ Jogador 1                    Servidor                    Jogador 2
 - **Python 3.10 ou superior**, somente biblioteca padrão (`socket`, `json`, `unittest`...). Nada para instalar com `pip`.
 - **Três terminais** para uma partida: um para o servidor e um para cada jogador. Podem ser na mesma máquina (endereço `127.0.0.1`) ou em máquinas diferentes na mesma rede.
 - **Rede**: o computador do servidor precisa ser alcançável pelos clientes (IP ou nome) e a **porta TCP** escolhida precisa estar liberada no firewall. A porta deve ser configurável; sugerimos `5050` como padrão.
-- **Execução**: `python servidor.py [porta]` (fase 3, porta padrão `5050`, ouve em todas as interfaces) e, prevista para a fase 4, `python cliente.py [endereco_do_servidor] [porta]`.
+- **Execução**: `python servidor.py [porta]` (fase 3, porta padrão `5050`, ouve em todas as interfaces) e `python cliente.py [endereco_do_servidor] [porta]` (fase 4, padrões `127.0.0.1` e `5050`).
 - Terminal que exiba UTF-8, pois as mensagens de texto têm acentos. Os tabuleiros usam só caracteres ASCII.
 
 ## 4. Por que TCP
@@ -251,6 +253,18 @@ Como o servidor está organizado:
 | `Conexao` | Socket, leitor único (`makefile("rb")`), número do jogador e um lock de envio por socket (seção 11). `fechar()` encerra a conexão; leitor e socket são liberados pela própria thread da conexão. |
 
 Eventos de uma conexão que o servidor já encerrou são ignorados. Se o jogador 1 tiver caído no exato momento em que o segundo chega (o envio de `INICIO` falha), a partida não começa e quem chegou vira o jogador 1 (observação da seção 9.2).
+
+### Usando o cliente.py (fase 4)
+
+```
+python cliente.py                  # conecta em 127.0.0.1:5050
+python cliente.py 192.168.0.10     # conecta em outro IP na porta 5050
+python cliente.py 127.0.0.1 6000   # endereço e porta personalizados
+```
+
+O que já funciona (linhas da tabela 9.3): conexão TCP com leitor único (`makefile("rb")`), transição entre `CONECTADO`, `MINHA_VEZ`, `VEZ_ADVERSARIO` e `ENCERRADO`, exibição de `AGUARDE`, desenho dos dois tabuleiros iniciais ao receber `INICIO`, tratamento de `ATUALIZACAO`, decisão de `ERRO` pelo campo `codigo` (encerrando em `SERVIDOR_CHEIO`), encerramento limpo ao receber `FIM` (`VITORIA`, `ADVERSARIO_SAIU`, `ADVERSARIO_DESCONECTOU`), envio de `SAIR` via `Ctrl+C` e tratamento de queda de conexão (`ConexaoEncerrada` / `MensagemInvalida`).
+
+**Ainda não implementado (fase 7):** a leitura de coordenadas digitadas pelo jogador e o envio de `DISPARAR` no turno (`ao_minha_vez()`).
 
 ## 7. Catálogo de mensagens
 
@@ -677,6 +691,8 @@ python3 -m unittest discover -s tests -p 'test_tabuleiro.py' -v
 
 `tests/test_tabuleiro.py` cobre coordenadas, posicionamentos explícitos válidos e inválidos, sorteios reproduzíveis, 100 sementes de sorteio, água, acerto, afundamento, disparos repetidos, preservação do estado após erros e independência entre tabuleiros. Reproduz também o exemplo da seção 6.
 
+`tests/test_cliente.py` testa o `cliente.py` contra um servidor real em `127.0.0.1` e via `socket.socketpair()`. Cobre `AGUARDE`, `INICIO` e transição de turno, desenho dos tabuleiros, `SERVIDOR_CHEIO`, envio de `SAIR`, `ERRO` sem alterar estado, `ATUALIZACAO`, `FIM`, queda de conexão e argumentos de linha de comando.
+
 (No Windows, se `python` abrir a Microsoft Store, use `py -3`.) Os testes de `tests/test_protocolo.py` usam `socket.socketpair()`: dois sockets reais ligados entre si, sem servidor nem cliente. Cobrem envio e recebimento de uma mensagem, duas mensagens juntas, mensagem em partes (inclusive byte a byte e cortada no meio de um caractere acentuado), JSON inválido e outras linhas inválidas, linha acima do limite, conexão encerrada, envio para conexão encerrada e mensagem interrompida antes da LF.
 
 ## 13. Guia de leitura por integrante
@@ -685,7 +701,7 @@ Todos: seções 2, 4, 5 e 11.
 
 - **Tabuleiros e regras (fases 2 e 5):** seção 6 (representação, coordenadas e API do `tabuleiro.py`) e 7.5 (`resultado` e `navios_restantes`). A fase 2 entrega o tabuleiro com 2 navios de 2 casas e a validação e aplicação dos disparos. Na fase 5 serão implementados turnos, vitória, contagem de navios restantes e visão de cada jogador, **sem nunca incluir `N` no tabuleiro do adversário**.
 - **Servidor (fases 3 e 6):** seções 5, 7, 8 e 9.2, o exemplo da 10 e "Usando o servidor.py" na seção 6. Atenção à ordem de verificação do `DISPARAR`, a quem recebe cada mensagem (`ERRO` só para quem errou), à proteção do estado da partida contra acesso simultâneo e ao `Lock` por socket (seção 11).
-- **Cliente (fase 4):** seções 6, 7, 8 e 9.3, e o exemplo da 10. Atenção a normalizar a coordenada (`strip().upper()`), a decidir a ação pelo `codigo` do `ERRO` e ao uso de `INICIO`/`ATUALIZACAO` para redesenhar tudo (os tabuleiros vêm completos a cada mensagem).
+- **Cliente (fases 4 e 7):** seções 6, 7, 8 e 9.3, e o exemplo da 10. Atenção a normalizar a coordenada (`strip().upper()`), a decidir a ação pelo `codigo` do `ERRO` e ao uso de `INICIO`/`ATUALIZACAO` para redesenhar tudo (os tabuleiros vêm completos a cada mensagem).
 
 ## 14. Decisões de projeto a confirmar
 
