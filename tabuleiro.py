@@ -1,4 +1,4 @@
-"""Tabuleiro de um jogador de Batalha Naval (fase 2).
+"""Tabuleiro de um jogador de Batalha Naval (fases 2 e 5).
 
 Cria um tabuleiro 5x5 com dois navios de duas casas e aplica os disparos
 recebidos. Não usa sockets nem controla jogadores, turnos ou vitória.
@@ -130,12 +130,18 @@ class Tabuleiro:
                 return "AFUNDOU" if navio.issubset(self._disparos) else "ACERTO"
         return "AGUA"
 
-    def como_lista(self) -> list[str]:
-        """Devolve uma cópia do tabuleiro completo, em 5 strings de 5 caracteres.
+    @property
+    def navios_restantes(self) -> int:
+        """Quantidade de navios que ainda têm pelo menos uma casa intacta."""
+        return sum(not navio.issubset(self._disparos) for navio in self._navios)
+
+    def como_lista(self, ocultar_navios: bool = False) -> list[str]:
+        """Devolve uma cópia do tabuleiro, em 5 strings de 5 caracteres.
 
         Usa ~ (água), N (navio intacto), O (tiro na água) e X (navio atingido).
-        Contém posições ocultas: destina-se ao servidor ou ao próprio dono.
-        A visão do adversário será implementada na fase 5.
+        Sem argumentos, inclui N e destina-se ao servidor ou ao próprio dono.
+        Com ocultar_navios=True, troca navios intactos por ~, preservando O e X:
+        essa é a visão permitida ao adversário, inclusive depois da vitória.
         """
         casas_navios = set().union(*self._navios)
         linhas = []
@@ -146,6 +152,6 @@ class Tabuleiro:
                 if coordenada in self._disparos:
                     casas.append("X" if coordenada in casas_navios else "O")
                 else:
-                    casas.append("N" if coordenada in casas_navios else "~")
+                    casas.append("N" if coordenada in casas_navios and not ocultar_navios else "~")
             linhas.append("".join(casas))
         return linhas

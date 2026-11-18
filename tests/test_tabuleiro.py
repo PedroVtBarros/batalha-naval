@@ -160,5 +160,36 @@ class TestDisparos(unittest.TestCase):
         self.assertEqual(self.tabuleiro.como_lista(), ["NN~~~", "~~~~~", "~~~~~", "~~~N~", "~~~N~"])
 
 
+class TestVisibilidadeEContagem(unittest.TestCase):
+    def setUp(self):
+        self.tabuleiro = Tabuleiro([("A1", "B1"), ("D4", "D5")])
+
+    def test_visao_oculta_nao_revela_navios_antes_dos_disparos(self):
+        self.assertEqual(self.tabuleiro.como_lista(ocultar_navios=True), ["~~~~~"] * 5)
+        self.assertEqual(self.tabuleiro.como_lista()[0], "NN~~~")
+
+    def test_visao_oculta_preserva_agua_e_acertos(self):
+        self.tabuleiro.receber_disparo("C2")
+        self.tabuleiro.receber_disparo("D4")
+        self.assertEqual(
+            self.tabuleiro.como_lista(ocultar_navios=True),
+            ["~~~~~", "~~O~~", "~~~~~", "~~~X~", "~~~~~"],
+        )
+        self.assertEqual(self.tabuleiro.como_lista()[4], "~~~N~")
+
+    def test_contagem_so_diminui_quando_navio_afunda(self):
+        self.assertEqual(self.tabuleiro.navios_restantes, 2)
+        for coordenada, quantidade in (("C2", 2), ("A1", 2), ("B1", 1),
+                                       ("D5", 1), ("D4", 0)):
+            self.tabuleiro.receber_disparo(coordenada)
+            self.assertEqual(self.tabuleiro.navios_restantes, quantidade)
+
+    def test_alterar_visao_oculta_nao_altera_tabuleiro(self):
+        visao = self.tabuleiro.como_lista(ocultar_navios=True)
+        visao[0] = "XXXXX"
+        self.assertEqual(self.tabuleiro.como_lista(ocultar_navios=True), ["~~~~~"] * 5)
+        self.assertEqual(self.tabuleiro.navios_restantes, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

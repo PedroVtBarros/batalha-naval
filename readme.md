@@ -31,12 +31,12 @@ Este arquivo é a documentação única da aplicação: propósito, funcionament
 | 2 | Tabuleiro: criar, posicionar navios e verificar disparos | Integrante 2 | **Implementado** |
 | 3 | Servidor: aceitar os dois jogadores e aguardar o segundo | Integrante 3 | **Implementado** |
 | 4 | Cliente: conectar ao servidor e receber mensagens | Ariel | **Implementado** |
-| 5 | Regras da partida: turnos, vitória e visão de cada jogador | Integrante 2 | Previsto |
+| 5 | Regras da partida: turnos, vitória e visão de cada jogador | Integrante 2 | **Implementado** |
 | 6 | Servidor: integrar as regras, receber disparos e enviar resultados | Integrante 3 | Previsto |
 | 7 | Cliente: interface e entrada dos disparos | Ariel | Previsto |
 | 8 | Testes de integração e fechamento da documentação | Pedro | Previsto |
 
-As fases 1, 2, 3 e 4 estão implementadas: protocolo de comunicação, tabuleiro de um jogador, servidor que recebe os dois jogadores e cliente base que conecta e recebe as mensagens. **Ainda não é possível disputar uma partida**: faltam o processamento dos disparos no servidor (turnos, resultado, vitória e visão de cada jogador) e a entrada de jogadas no cliente. As mensagens, estados e eventos abaixo são o contrato para as próximas fases.
+As fases 1 a 5 estão implementadas: protocolo de comunicação, tabuleiro de um jogador, servidor que recebe os dois jogadores, cliente base e regras completas em `partida.py` (turnos, vitória e visão de cada jogador). As regras já podem ser exercitadas localmente. **Ainda não é possível disputar uma partida pelo cliente TCP**: faltam a integração dessas regras ao servidor (fase 6) e a entrada de jogadas no cliente (fase 7). As mensagens, estados e eventos abaixo continuam sendo o contrato para essa integração.
 
 Estrutura atual:
 
@@ -44,13 +44,15 @@ Estrutura atual:
 .
 ├── readme.md                  documentação única (este arquivo)
 ├── protocolo.py               envio e recebimento de mensagens (compartilhado)
-├── tabuleiro.py               navios e disparos recebidos por um jogador
+├── tabuleiro.py               navios, disparos, contagem e visão oculta
+├── partida.py                 turnos, vitória e visão de cada jogador
 ├── servidor.py                servidor TCP: recebe os jogadores e conduz a partida
 ├── cliente.py                 cliente TCP: conecta ao servidor e recebe mensagens
 └── tests/
     ├── test_protocolo.py      testes do protocolo.py
     ├── test_servidor.py       testes do servidor.py
     ├── test_tabuleiro.py      testes do tabuleiro.py
+    ├── test_partida.py        testes das regras da partida
     └── test_cliente.py        testes do cliente.py
 ```
 
@@ -193,7 +195,7 @@ Exemplo: o tabuleiro com navios em `A1-B1` (horizontal) e `D4-D5` (vertical), co
 - O servidor **nunca** envia o tabuleiro próprio de um jogador ao outro.
 - Um navio está **afundado** quando suas 2 casas foram atingidas. Isso aparece no `resultado` `AFUNDOU` e em `navios_restantes`.
 
-### Usando o tabuleiro.py (fase 2)
+### Usando o tabuleiro.py (fases 2 e 5)
 
 Este módulo representa **um único tabuleiro**, que será mantido pelo servidor. Não usa sockets e não depende da interface: pode ser usado por um cliente de terminal ou por uma futura interface gráfica através do servidor.
 
@@ -205,6 +207,8 @@ Este módulo representa **um único tabuleiro**, que será mantido pelo servidor
 | `coordenada_para_indices(coordenada)` | Valida `A1` a `E5` e devolve `(linha, coluna)` começando em zero; `B3` vira `(2, 1)`. |
 | `receber_disparo(coordenada)` | Registra o tiro e devolve `AGUA`, `ACERTO` ou `AFUNDOU`. |
 | `como_lista()` | Devolve uma cópia do tabuleiro completo em 5 strings de 5 caracteres, usando `~`, `N`, `O` e `X`. |
+| `como_lista(ocultar_navios=True)` | Devolve uma cópia sem navios intactos: troca `N` por `~`, mantendo `O` e `X`. |
+| `navios_restantes` | Propriedade com a quantidade de navios que ainda têm pelo menos uma casa intacta, de 0 a 2. |
 | `CoordenadaInvalida` | Disparo fora do formato aceito; tem `codigo = "COORDENADA_INVALIDA"`. |
 | `DisparoRepetido` | A casa já recebeu um tiro; tem `codigo = "DISPARO_REPETIDO"`. |
 | `PosicionamentoInvalido` | Os navios fornecidos ao construtor não respeitam as regras de posicionamento. |
@@ -225,9 +229,59 @@ print(tabuleiro.receber_disparo("D5"))  # AFUNDOU
 
 Um tiro na água marca `O`; um tiro num navio marca `X`. O resultado é `AFUNDOU` somente quando as duas casas **daquele navio** foram atingidas. Navios podem encostar, mas não podem ocupar a mesma casa. Erros de coordenada ou repetição não alteram o estado. Cada objeto mantém seus próprios navios e disparos, sem compartilhar estado com outro tabuleiro.
 
-**Integração nas próximas fases:** antes de chamar `receber_disparo`, o servidor deve verificar se a partida começou e se é a vez do jogador, nessa ordem (seção 8). O método deve ser chamado no tabuleiro **do alvo**. As exceções de disparo fornecem `codigo` e texto (`str(erro)`) para o servidor montar a mensagem `ERRO`; o módulo não envia mensagens por conta própria.
+**Integração:** o método `receber_disparo` continua operando em um único tabuleiro. Para controlar uma partida, use `Partida.disparar`, que valida a vez e aplica o tiro no tabuleiro **do alvo**. O servidor verifica antes se a partida começou (seção 8). As exceções de disparo fornecem `codigo` e texto (`str(erro)`) para montar a mensagem `ERRO`; esses módulos não enviam mensagens por conta própria.
 
-`como_lista()` contém os navios intactos (`N`) e serve apenas para o servidor ou o próprio dono. **Não deve ser enviado ao adversário.** A visão filtrada, a contagem de navios restantes e o controle de turnos e vitória ficam para a fase 5. A fase 2 não cria partidas nem decide vencedores.
+`como_lista()` contém os navios intactos (`N`) e serve apenas para o servidor ou o próprio dono. **Não deve ser enviado ao adversário.** A fase 5 acrescenta `como_lista(ocultar_navios=True)` e `navios_restantes`; o controle de turnos, vitória e composição da visão de cada jogador está em `partida.py`.
+
+### Usando o partida.py (fase 5)
+
+`Partida` representa uma partida **já iniciada**, com dois jogadores. O jogador 1 começa. Todo disparo válido passa a vez, mesmo um acerto ou afundamento, exceto o que encerra a partida. Coordenada inválida, tiro repetido ou tentativa fora da vez não alteram tabuleiros, turno ou vencedor.
+
+| Item | Comportamento |
+|------|---------------|
+| `Partida()` | Cria uma partida com dois tabuleiros sorteados. |
+| `Partida(tabuleiro_1, tabuleiro_2)` | Usa dois tabuleiros recém-criados, distintos e sem disparos anteriores. Útil para testes e para reaproveitar a fábrica de tabuleiros do servidor. |
+| `disparar(jogador, coordenada)` | Verifica a vez, aplica o disparo no adversário e devolve `AGUA`, `ACERTO` ou `AFUNDOU`. |
+| `vez` | Propriedade com o jogador da vez (`1` ou `2`); `None` depois da vitória. |
+| `vencedor` | Propriedade com `1` ou `2` depois da vitória; `None` enquanto ninguém venceu. |
+| `encerrada` | Propriedade booleana que informa se a partida terminou por vitória. |
+| `visao(jogador)` | Devolve cópias de `sua_vez`, `tabuleiro_proprio`, `tabuleiro_adversario` e `navios_restantes`, do ponto de vista de quem recebe. |
+| `ForaDeVez` | Tentativa de disparo fora do turno; tem `codigo = "FORA_DE_VEZ"`. |
+| `PartidaEncerrada` | Chamada de disparo depois da vitória. É uma proteção interna; não acrescenta código de erro ao protocolo. |
+| `JogadorInvalido` | Identificador diferente dos inteiros `1` e `2`. É um erro de uso da API; a identidade deve vir da conexão do servidor. |
+| `PartidaError` | Classe-base dos erros de controle. `CoordenadaInvalida` e `DisparoRepetido`, de `tabuleiro.py`, são propagados. |
+
+A vitória é identificada quando o tabuleiro alvo fica com zero navios restantes. Nesse disparo final, `vez` passa a `None` e `sua_vez` fica `false` **para os dois jogadores**. Mesmo depois da vitória, a visão do adversário nunca revela navios intactos (`N`). As listas e contagens devolvidas são cópias: modificar uma visão não altera a partida, e novas jogadas não modificam visões antigas.
+
+Exemplo de uma partida completa local, sem servidor, usando os navios da seção 10. Execute o bloco inteiro no terminal, a partir da raiz do projeto:
+
+```bash
+python3 - <<'PY'
+from partida import Partida
+from tabuleiro import Tabuleiro
+
+partida = Partida(
+    Tabuleiro([("A1", "B1"), ("D4", "D5")]),
+    Tabuleiro([("D1", "E1"), ("B3", "B4")]),
+)
+jogadas = [(1, "D1"), (2, "C1"), (1, "E1"), (2, "C2"),
+           (1, "B3"), (2, "C3"), (1, "B4")]
+for jogador, coordenada in jogadas:
+    resultado = partida.disparar(jogador, coordenada)
+    print(f"Jogador {jogador} -> {coordenada}: {resultado}; próxima vez: {partida.vez}")
+print("Vencedor:", partida.vencedor)  # 1
+print("Visão do jogador 2:", partida.visao(2))
+PY
+```
+
+**Integração a fazer na fase 6:**
+
+1. Quando o segundo jogador entrar, criar `Partida` com os dois tabuleiros produzidos pela fábrica do servidor. A espera pelo adversário continua sendo responsabilidade do servidor.
+2. Em `Servidor._disparo_em_partida`, com o lock do estado adquirido, chamar `partida.disparar(conexao.numero, mensagem.get("coordenada"))`. O número deve vir da conexão, nunca de um campo informado pelo cliente. `ForaDeVez`, `CoordenadaInvalida` e `DisparoRepetido` fornecem os códigos já definidos; o servidor responde `ERRO` somente ao autor.
+3. Após um disparo válido, obter `visao(1)` e `visao(2)` e usar cada visão para compor a respectiva `ATUALIZACAO`, junto com `atirador`, `coordenada` e `resultado`. Não enviar uma mesma visão aos dois jogadores.
+4. Se `partida.encerrada`, enviar primeiro as atualizações finais, depois `FIM` com `motivo: "VITORIA"` e `partida.vencedor`; fechar as conexões e liberar a partida. Caso contrário, atualizar o estado do servidor a partir de `partida.vez`.
+
+A classe não tem sockets, não envia `FIM` e não trata `SAIR` ou desconexões. Esses eventos e a sincronização continuam sob responsabilidade do servidor. Ao entregar os tabuleiros a `Partida`, aplique os disparos somente por `Partida.disparar`, evitando alterações que ignorem os turnos. O servidor atual ainda precisa realizar a integração acima; executar os três terminais continua exibindo apenas o início da partida.
 
 ### Usando o servidor.py (fase 3)
 
@@ -240,7 +294,7 @@ O servidor mostra no terminal cada evento (conexões, início, saídas). Para en
 
 O que já funciona (linhas da tabela 9.2): `AGUARDE` ao primeiro jogador (1); `INICIO` aos dois quando o segundo conecta, com tabuleiros sorteados pelo `tabuleiro.py` (2); `ERRO PARTIDA_NAO_INICIADA` para `DISPARAR` enquanto aguarda (3); saída ou queda do jogador 1 enquanto aguarda, voltando a `SEM_JOGADORES` (4 e 5); `ERRO MENSAGEM_INVALIDA` e `TIPO_DESCONHECIDO` (10); `FIM ADVERSARIO_SAIU` e `FIM ADVERSARIO_DESCONECTOU` (11 e 12); `ERRO SERVIDOR_CHEIO` a um terceiro cliente (13). Depois de um `FIM`, o servidor aceita uma nova partida.
 
-**Ainda não implementado (fases 5 e 6):** o `DISPARAR` durante a partida (linhas 6 a 9) só é registrado no log; o servidor ainda não verifica a vez, não responde e não envia `ATUALIZACAO`. O ponto de integração é o método `Servidor._disparo_em_partida`, chamado já com o lock do estado adquirido e depois da verificação de partida iniciada.
+**Integração ainda não implementada (fase 6):** as regras já estão disponíveis em `partida.py`, mas o `DISPARAR` durante a partida (linhas 6 a 9) ainda só é registrado no log do servidor. Ele ainda não aplica essas regras, não responde e não envia `ATUALIZACAO`. O ponto de integração é `Servidor._disparo_em_partida`, chamado com o lock do estado adquirido e depois da verificação de partida iniciada. O roteiro está em "Usando o partida.py" acima.
 
 Como o servidor está organizado:
 
@@ -689,7 +743,15 @@ python3 -m unittest discover -s tests -p 'test_tabuleiro.py' -v
 
 `tests/test_servidor.py` sobe um servidor real numa porta livre de `127.0.0.1` e conecta clientes TCP de verdade. Cobre `AGUARDE`, `INICIO` para cada jogador, `PARTIDA_NAO_INICIADA`, saída e queda enquanto aguarda, mensagens inválidas e tipos desconhecidos, `SERVIDOR_CHEIO`, `FIM` por saída, queda ou mensagem incompleta, erros só para quem errou e nova partida depois do fim.
 
-`tests/test_tabuleiro.py` cobre coordenadas, posicionamentos explícitos válidos e inválidos, sorteios reproduzíveis, 100 sementes de sorteio, água, acerto, afundamento, disparos repetidos, preservação do estado após erros e independência entre tabuleiros. Reproduz também o exemplo da seção 6.
+`tests/test_tabuleiro.py` cobre coordenadas, posicionamentos explícitos válidos e inválidos, sorteios reproduzíveis, 100 sementes de sorteio, água, acerto, afundamento, disparos repetidos, preservação do estado após erros, independência entre tabuleiros, contagem de navios restantes e ocultação dos navios intactos. Reproduz também o exemplo da seção 6.
+
+Para verificar somente as regras da fase 5, sem sockets:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_partida.py' -v
+```
+
+`tests/test_partida.py` cobre jogador inicial, alternância de turnos, prioridade dos erros, tentativas inválidas sem mudança de estado, visões dos dois jogadores iguais às da seção 10, contagens relativas, cópias das visões e partidas independentes. Exercita partidas completas com vitória de cada jogador, impedimento de novos tiros após o fim e privacidade da frota do vencedor.
 
 `tests/test_cliente.py` testa o `cliente.py` contra um servidor real em `127.0.0.1` e via `socket.socketpair()`. Cobre `AGUARDE`, `INICIO` e transição de turno, desenho dos tabuleiros, `SERVIDOR_CHEIO`, envio de `SAIR`, `ERRO` sem alterar estado, `ATUALIZACAO`, `FIM`, queda de conexão e argumentos de linha de comando.
 
@@ -699,7 +761,7 @@ python3 -m unittest discover -s tests -p 'test_tabuleiro.py' -v
 
 Todos: seções 2, 4, 5 e 11.
 
-- **Tabuleiros e regras (fases 2 e 5):** seção 6 (representação, coordenadas e API do `tabuleiro.py`) e 7.5 (`resultado` e `navios_restantes`). A fase 2 entrega o tabuleiro com 2 navios de 2 casas e a validação e aplicação dos disparos. Na fase 5 serão implementados turnos, vitória, contagem de navios restantes e visão de cada jogador, **sem nunca incluir `N` no tabuleiro do adversário**.
+- **Tabuleiros e regras (fases 2 e 5):** seção 6 (representação, coordenadas e APIs de `tabuleiro.py` e `partida.py`) e 7.5 (`resultado` e `navios_restantes`). As duas fases estão implementadas: `Tabuleiro` posiciona navios, recebe tiros, conta os navios restantes e gera a visão oculta; `Partida` controla turnos, vitória e visão de cada jogador, **sem nunca incluir `N` no tabuleiro do adversário**. A integração com o servidor cabe à fase 6.
 - **Servidor (fases 3 e 6):** seções 5, 7, 8 e 9.2, o exemplo da 10 e "Usando o servidor.py" na seção 6. Atenção à ordem de verificação do `DISPARAR`, a quem recebe cada mensagem (`ERRO` só para quem errou), à proteção do estado da partida contra acesso simultâneo e ao `Lock` por socket (seção 11).
 - **Cliente (fases 4 e 7):** seções 6, 7, 8 e 9.3, e o exemplo da 10. Atenção a normalizar a coordenada (`strip().upper()`), a decidir a ação pelo `codigo` do `ERRO` e ao uso de `INICIO`/`ATUALIZACAO` para redesenhar tudo (os tabuleiros vêm completos a cada mensagem).
 
