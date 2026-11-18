@@ -434,6 +434,9 @@ class TestConexaoPerdida(BaseCliente):
         # Lança o loop em background
         t = self._executar_cliente_em_thread(cliente)
 
+        # Só derruba depois de o servidor ter registrado o jogador: antes disso
+        # encerrar() não enxerga a conexão (corrida que aparecia no Linux).
+        self.esperar_estado_servidor(AGUARDANDO_SEGUNDO)
         # Encerra o servidor bruscamente para derrubar a conexão
         self.servidor.encerrar()
         t.join(timeout=5)

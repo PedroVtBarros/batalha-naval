@@ -21,12 +21,21 @@ Fase 7 - interface completa e loop de disparos:
     ao_minha_vez() le a coordenada digitada pelo jogador, normaliza com
     strip().upper(), envia DISPARAR ao servidor ou SAIR se o jogador digitar
     "SAIR". Trata EOFError e KeyboardInterrupt durante o input().
+
+Fase 8 - recepção enquanto se espera a digitação:
+    a leitura da rede (thread de leitura) e a do teclado (thread de entrada,
+    só na vez do jogador) são separadas e entregam eventos a uma fila que a
+    thread principal consome. Assim um FIM do servidor encerra o cliente mesmo
+    com o jogador parado no prompt, e o Ctrl+C continua funcionando no Windows.
 """
 
 from __future__ import annotations
 
+import os
+import queue
 import socket
 import sys
+import threading
 from typing import Any
 
 from protocolo import (
@@ -75,6 +84,13 @@ class Cliente:
         # Tabuleiros são armazenados após INICIO/ATUALIZACAO (Fase 7 vai usá-los)
         self.tabuleiro_proprio: list[str] | None = None
         self.tabuleiro_adversario: list[str] | None = None
+        # Fase 8: a recepção da rede e a leitura do teclado rodam em threads
+        # próprias (ver _loop_recepcao). O envio pode vir de duas threads (a da
+        # entrada do usuário e a principal, no SAIR por Ctrl+C), então tem lock.
+        self._lock_envio = threading.Lock()
+        self._disparos_sem_resposta = 0  # DISPARAR enviados que ainda não tiveram ATUALIZACAO/ERRO
+        self._thread_leitura: threading.Thread | None = None
+        self._thread_entrada: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     # API pública
@@ -82,7 +98,16 @@ class Cliente:
 
     def enviar(self, mensagem: dict[str, Any]) -> None:
         """Envia uma mensagem ao servidor."""
-        enviar_mensagem(self._sock, mensagem)
+        with self._lock_envio:
+            if mensagem.get("tipo") == "DISPARAR":
+                # Contado antes do envio: a resposta nunca chega antes da contagem.
+                self._disparos_sem_resposta += 1
+            enviar_mensagem(self._sock, mensagem)
+
+    @property
+    def entrada_pendente(self) -> bool:
+        """True se ainda há uma thread bloqueada esperando o jogador digitar."""
+        return self._thread_entrada is not None and self._thread_entrada.is_alive()
 
     def enviar_sair(self) -> None:
         """Envia SAIR e marca o estado como ENCERRADO."""
@@ -165,33 +190,83 @@ class Cliente:
     # ------------------------------------------------------------------
 
     def _loop_recepcao(self) -> None:
-        while self.estado != ENCERRADO:
-            # Se é a vez do jogador, lê a entrada antes de esperar o servidor.
-            # Isso garante que ao_minha_vez() seja chamado novamente após um
-            # ERRO (coordenada inválida, repetida etc.) sem precisar receber
-            # outra mensagem primeiro.
-            if self.estado == MINHA_VEZ:
-                encerrar = self.ao_minha_vez()
-                if encerrar:
-                    self.estado = ENCERRADO
-                    return
-                # Após enviar DISPARAR, aguarda a resposta do servidor.
+        """Laço principal (fase 8): uma fila recebe eventos de duas threads.
 
-            if self.estado == ENCERRADO:
-                return
+        - thread de leitura: bloqueia em receber_mensagem e enfileira o que o
+          servidor envia (ATUALIZACAO, ERRO, FIM...);
+        - thread de entrada: roda ao_minha_vez() (input()) só na vez do jogador.
+
+        Assim o cliente continua recebendo do servidor enquanto espera o
+        jogador digitar: um FIM (adversário saiu/caiu) encerra o cliente na
+        hora, sem exigir uma tecla. A thread principal só espera na fila com
+        timeout curto, o que mantém o Ctrl+C funcionando também no Windows.
+        """
+        eventos: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._thread_leitura = threading.Thread(
+            target=self._ler_rede, args=(eventos,), daemon=True, name="cliente-leitura"
+        )
+        self._thread_leitura.start()
+
+        while self.estado != ENCERRADO:
+            # Na vez do jogador, pede a coordenada. Só depois de receber a resposta
+            # a um DISPARAR (ex.: um ERRO de coordenada inválida) pede de novo.
+            if (
+                self.estado == MINHA_VEZ
+                and not self.entrada_pendente
+                and self._disparos_sem_resposta == 0
+            ):
+                self._thread_entrada = threading.Thread(
+                    target=self._ler_entrada, args=(eventos,), daemon=True, name="cliente-entrada"
+                )
+                self._thread_entrada.start()
 
             try:
-                mensagem = receber_mensagem(self._leitor)
-            except MensagemInvalida as erro:
-                # Linha incompleta/inválida *vinda do servidor* → falha de protocolo.
-                print(f"[ERRO DE PROTOCOLO] Mensagem inválida do servidor: {erro}")
-                self.estado = ENCERRADO
-                return
-            except ConexaoEncerrada:
-                self._on_conexao_perdida()
-                return
+                tipo, valor = eventos.get(timeout=0.2)
+            except queue.Empty:
+                continue
 
-            self._despachar(mensagem)
+            if tipo == "mensagem":
+                if valor.get("tipo") in ("ATUALIZACAO", "ERRO"):
+                    with self._lock_envio:
+                        self._disparos_sem_resposta = max(0, self._disparos_sem_resposta - 1)
+                self._despachar(valor)
+            elif tipo == "entrada":
+                if valor:  # ao_minha_vez() pediu para encerrar (SAIR, EOF, Ctrl+C)
+                    self.estado = ENCERRADO
+            elif tipo == "protocolo":
+                # Linha inválida *vinda do servidor* → falha de protocolo.
+                print(f"[ERRO DE PROTOCOLO] Mensagem inválida do servidor: {valor}")
+                self.estado = ENCERRADO
+            else:  # "conexao_encerrada"
+                self._on_conexao_perdida()
+
+    def _ler_rede(self, eventos: "queue.Queue[tuple[str, Any]]") -> None:
+        """Thread de leitura: dona do leitor; lê até o fim da conexão e o libera.
+
+        No Windows nada desbloqueia uma leitura em andamento a partir de outra
+        thread (nem shutdown nem close), por isso só esta thread fecha o leitor.
+        """
+        try:
+            while True:
+                try:
+                    eventos.put(("mensagem", receber_mensagem(self._leitor)))
+                except MensagemInvalida as erro:
+                    eventos.put(("protocolo", erro))
+                    return
+                except (ConexaoEncerrada, OSError, ValueError):
+                    eventos.put(("conexao_encerrada", None))
+                    return
+        finally:
+            self._liberar_recursos()
+
+    def _ler_entrada(self, eventos: "queue.Queue[tuple[str, Any]]") -> None:
+        """Thread de entrada: executa o hook ao_minha_vez() e avisa o resultado."""
+        try:
+            encerrar = bool(self.ao_minha_vez())
+        except (ConexaoEncerrada, OSError):
+            eventos.put(("conexao_encerrada", None))
+            return
+        eventos.put(("entrada", encerrar))
 
     def _despachar(self, mensagem: dict[str, Any]) -> None:
         """Roteia a mensagem recebida para o tratador correto."""
@@ -311,12 +386,32 @@ class Cliente:
         print("\n[INFO] Interrompido pelo usuário. Enviando SAIR...")
         self.enviar_sair()
 
+    def fechar(self) -> None:
+        """Encerra a conexão (idempotente); útil para quem não usa executar()."""
+        self._fechar()
+
     def _fechar(self) -> None:
-        """Fecha leitor e socket. Sempre chamado no finally de executar()."""
+        """Encerra a conexão. Sempre chamado no finally de executar().
+
+        Se a thread de leitura está bloqueada no leitor, fechar o leitor daqui
+        travaria; então só se faz shutdown() do socket (o servidor percebe o fim
+        da conexão e fecha o lado dele) e a própria thread de leitura libera
+        leitor e socket quando a leitura terminar.
+        """
+        leitura = self._thread_leitura
+        if leitura is not None and leitura.is_alive():
+            try:
+                self._sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            return
+        self._liberar_recursos()
+
+    def _liberar_recursos(self) -> None:
         for recurso in (self._leitor, self._sock):
             try:
                 recurso.close()
-            except OSError:
+            except (OSError, ValueError):
                 pass
 
 
@@ -360,7 +455,18 @@ def main(argumentos: list[str]) -> int:
         return 1
 
     print("Conectado.")
-    cliente.executar()
+    cliente.executar()  # o finally de executar() já encerra o socket
+    if cliente.entrada_pendente:
+        # O FIM chegou com a thread do teclado ainda bloqueada no input(). No Linux,
+        # com o stdin ligado a um terminal, o interpretador fica travado ao finalizar
+        # esperando essa leitura (reproduzido com Python 3.12 em um pseudo-terminal);
+        # no Windows termina normalmente. Como não há como interromper o input()
+        # de outra thread, saímos direto, mas só depois de fechar a conexão e
+        # descarregar a saída. Sem leitura pendente, a saída é a normal.
+        cliente.fechar()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
     return 0
 
 

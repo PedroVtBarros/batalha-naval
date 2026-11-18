@@ -2,13 +2,23 @@
 
 Jogo de Batalha Naval para dois jogadores, por turnos, com arquitetura cliente-servidor, escrito em Python e comunicando-se por sockets TCP. Trabalho da disciplina de Redes de Computadores.
 
-Este arquivo é a documentação única da aplicação: propósito, funcionamento, requisitos, justificativa do TCP e o **protocolo da camada de aplicação** (mensagens, estados e eventos) que cliente e servidor devem seguir.
+Este arquivo é a documentação única da aplicação: propósito, funcionamento, arquitetura, requisitos, como executar, justificativa do TCP e o **protocolo da camada de aplicação** (mensagens, estados e eventos) que cliente e servidor seguem.
+
+**Para jogar agora**, a partir da raiz do projeto, em três terminais (detalhes na [seção 3](#3-requisitos-mínimos-e-como-executar)):
+
+```powershell
+py -3 servidor.py          # terminal 1: servidor (porta 5050)
+py -3 cliente.py           # terminal 2: jogador 1
+py -3 cliente.py           # terminal 3: jogador 2
+```
+
+No Linux/macOS, troque `py -3` por `python3`.
 
 ## Sumário
 
 1. [Estado do projeto](#1-estado-do-projeto)
-2. [Propósito e funcionamento](#2-propósito-e-funcionamento)
-3. [Requisitos mínimos](#3-requisitos-mínimos)
+2. [Propósito, funcionamento e arquitetura](#2-propósito-funcionamento-e-arquitetura)
+3. [Requisitos mínimos e como executar](#3-requisitos-mínimos-e-como-executar)
 4. [Por que TCP](#4-por-que-tcp)
 5. [Formato das mensagens no fio](#5-formato-das-mensagens-no-fio)
 6. [Tabuleiro e coordenadas](#6-tabuleiro-e-coordenadas)
@@ -20,6 +30,7 @@ Este arquivo é a documentação única da aplicação: propósito, funcionament
 12. [Testes](#12-testes)
 13. [Guia de leitura por integrante](#13-guia-de-leitura-por-integrante)
 14. [Decisões de projeto a confirmar](#14-decisões-de-projeto-a-confirmar)
+15. [Roteiro de demonstração (cerca de 3 minutos)](#15-roteiro-de-demonstração-cerca-de-3-minutos)
 
 ---
 
@@ -27,18 +38,18 @@ Este arquivo é a documentação única da aplicação: propósito, funcionament
 
 | Fase | Entrega | Responsável | Situação |
 |------|---------|-------------|----------|
-| 1 | Protocolo: `protocolo.py`, este `readme.md` e `tests/test_protocolo.py` | Pedro | **Implementado** |
-| 2 | Tabuleiro: criar, posicionar navios e verificar disparos | Integrante 2 | **Implementado** |
-| 3 | Servidor: aceitar os dois jogadores e aguardar o segundo | Integrante 3 | **Implementado** |
-| 4 | Cliente: conectar ao servidor e receber mensagens | Ariel | **Implementado** |
-| 5 | Regras da partida: turnos, vitória e visão de cada jogador | Integrante 2 | **Implementado** |
-| 6 | Servidor: integrar as regras, receber disparos e enviar resultados | Integrante 3 | **Implementado** |
-| 7 | Cliente: interface e entrada dos disparos | Ariel | **Implementado** |
-| 8 | Testes de integração e fechamento da documentação | Pedro | Previsto |
+| 1 | Protocolo: `protocolo.py`, este `readme.md` e `tests/test_protocolo.py` | Pedro Vitor Moura de Araujo Barros | **Implementado** |
+| 2 | Tabuleiro: criar, posicionar navios e verificar disparos | Henrique Sousa Brito | **Implementado** |
+| 3 | Servidor: aceitar os dois jogadores e aguardar o segundo | JuanBarrer4 (identificação no GitHub) | **Implementado** |
+| 4 | Cliente: conectar ao servidor e receber mensagens | Ariel Pina | **Implementado** |
+| 5 | Regras da partida: turnos, vitória e visão de cada jogador | Henrique Sousa Brito | **Implementado** |
+| 6 | Servidor: integrar as regras, receber disparos e enviar resultados | JuanBarrer4 (identificação no GitHub) | **Implementado** |
+| 7 | Cliente: interface e entrada dos disparos | Ariel Pina | **Implementado** |
+| 8 | Testes de integração e fechamento da documentação | Pedro Vitor Moura de Araujo Barros | **Implementado** |
 
-As fases 1 a 7 estão implementadas: protocolo de comunicação, tabuleiro de um jogador, cliente base, regras completas em `partida.py` (turnos, vitória e visão de cada jogador), servidor que recebe os dois jogadores, processa os disparos com essas regras e envia `ATUALIZACAO` e `FIM`, e o cliente com interface completa de entrada de coordenadas e envio de `DISPARAR`. O servidor já conduz uma partida completa até a vitória e o cliente lê e envia jogadas pelo terminal. **Falta apenas a fase 8**: testes de integração e fechamento da documentação. As mensagens, estados e eventos abaixo continuam sendo o contrato.
+Todas as fases estão implementadas: protocolo de comunicação, tabuleiro de um jogador, regras completas em `partida.py` (turnos, vitória e visão de cada jogador), servidor que recebe os dois jogadores, processa os disparos com essas regras e envia `ATUALIZACAO` e `FIM`, e cliente com interface de terminal. A fase 8 acrescentou `tests/test_integracao.py` (servidor real e clientes reais por TCP, inclusive como processos) e corrigiu um defeito do cliente: ele ficava bloqueado esperando a digitação e só percebia o `FIM` do servidor depois de o jogador apertar Enter (ver [seção 2.1](#21-arquitetura)). As mensagens, estados e eventos abaixo são o contrato.
 
-Estrutura atual:
+Estrutura do projeto:
 
 ```
 .
@@ -47,16 +58,18 @@ Estrutura atual:
 ├── tabuleiro.py               navios, disparos, contagem e visão oculta
 ├── partida.py                 turnos, vitória e visão de cada jogador
 ├── servidor.py                servidor TCP: recebe os jogadores e conduz a partida
-├── cliente.py                 cliente TCP: conecta ao servidor e recebe mensagens
+├── cliente.py                 cliente TCP: interface de terminal e envio dos disparos
+├── .gitignore                 ignora __pycache__ e *.pyc
 └── tests/
     ├── test_protocolo.py      testes do protocolo.py
-    ├── test_servidor.py       testes do servidor.py
     ├── test_tabuleiro.py      testes do tabuleiro.py
     ├── test_partida.py        testes das regras da partida
-    └── test_cliente.py        testes do cliente.py
+    ├── test_servidor.py       testes do servidor.py
+    ├── test_cliente.py        testes do cliente.py
+    └── test_integracao.py     jogo completo: servidor real + clientes reais (fase 8)
 ```
 
-## 2. Propósito e funcionamento
+## 2. Propósito, funcionamento e arquitetura
 
 ### Propósito
 
@@ -92,13 +105,122 @@ Jogador 1                    Servidor                    Jogador 2
     |<-- ATUALIZACAO + FIM ----|---- ATUALIZACAO + FIM ------>|
 ```
 
-## 3. Requisitos mínimos
+### 2.1 Arquitetura
 
-- **Python 3.10 ou superior**, somente biblioteca padrão (`socket`, `json`, `unittest`...). Nada para instalar com `pip`.
+```
+ Computador do jogador 1            Computador do servidor            Computador do jogador 2
+ +--------------------+            +----------------------+          +--------------------+
+ |    cliente.py      |   TCP      |     servidor.py      |   TCP    |    cliente.py      |
+ |  (terminal, I/O)   |<---------->|  Servidor + Partida  |<-------->|  (terminal, I/O)   |
+ +--------------------+  conexão 1 |  + Tabuleiro x 2     | conexão 2+--------------------+
+                                    +----------------------+
+              protocolo.py (JSON + LF) é usado pelos dois lados
+```
+
+Um servidor, dois clientes, **uma conexão TCP por jogador**. Toda a comunicação é cliente ↔ servidor; os clientes nunca falam entre si.
+
+| Módulo | Responsabilidade | Conhece sockets? |
+|--------|------------------|------------------|
+| `protocolo.py` | Formato no fio: um objeto JSON UTF-8 por linha, terminado em LF. `enviar_mensagem` e `receber_mensagem` e as exceções `ConexaoEncerrada`, `MensagemIncompleta` e `MensagemInvalida`. Não conhece as regras do jogo. | sim |
+| `tabuleiro.py` | Um tabuleiro 5×5: sorteia os 2 navios, aplica disparos, conta navios restantes, gera a visão com ou sem os navios intactos. | não |
+| `partida.py` | Uma partida: de quem é a vez, validação do disparo (vez, coordenada, repetição), vitória e **a visão de cada jogador** (nunca revela `N` do adversário). | não |
+| `servidor.py` | Aceita as conexões, decide quem é jogador 1 e 2, traduz cada mensagem recebida em uma chamada a `Partida`, envia a cada jogador o **seu** resultado, trata `SAIR` e desconexões, recusa o terceiro cliente e volta a aceitar outra dupla ao fim. **É a única fonte da verdade.** | sim |
+| `cliente.py` | Conecta ao servidor, lê a coordenada digitada, envia `DISPARAR`/`SAIR` e desenha o que o servidor informa. Não decide nada sobre o jogo. | sim |
+
+**Threads do servidor.** A thread principal só aceita conexões; **cada conexão tem sua thread**, que bloqueia em `receber_mensagem`. Por isso o servidor percebe a saída de um jogador **mesmo quando ele está só esperando a sua vez** (ou o segundo jogador). Todo o estado (`_estado`, `_jogadores`, `_partida`) é protegido por **um único `Lock`**, então os eventos dos dois jogadores são tratados um por vez, e cada conexão tem ainda um lock de envio, porque a thread de um jogador também escreve no socket do outro.
+
+**Threads do cliente.** Ler o teclado e ler a rede são duas esperas que não podem se bloquear mutuamente. O cliente usa:
+
+- a **thread principal**, que só espera eventos numa fila (com prazo curto, o que mantém o `Ctrl+C` funcionando no Windows) e executa a máquina de estados;
+- a **thread de leitura da rede**, dona do leitor do socket, que enfileira cada mensagem do servidor;
+- a **thread de entrada**, que executa o `input()` **somente na vez do jogador**.
+
+Assim, se o adversário sair ou cair enquanto o jogador está no prompt `Sua vez!`, o `FIM` chega, o cliente mostra o desfecho e encerra **sem esperar uma tecla**.
+
+## 3. Requisitos mínimos e como executar
+
+### 3.1 Requisitos
+
+- **Python 3.10 ou superior** (compatibilidade **estimada**, ver abaixo), somente biblioteca padrão (`socket`, `json`, `threading`, `unittest`...). Nada para instalar com `pip`.
+- **Versões efetivamente testadas** (a suíte completa, 157 testes, passou nas duas):
+  - Windows 11, Python **3.14.10** (`py -3`), inclusive o cliente e o servidor em console real, com `Ctrl+C` real;
+  - Ubuntu no WSL, Python **3.12.3** (`python3`), inclusive o cliente e o servidor num pseudo-terminal (`pty`) com `Ctrl+C`.
+- **Compatibilidade estimada, não testada:** Python **3.10 e 3.11**. O mínimo de 3.10 vem da leitura do código (tipos `X | None` avaliados em tempo de execução em `partida.py` e `TimeoutError` como o erro de tempo esgotado de `socket`), não de uma execução. Também **não testados:** macOS e dois computadores físicos (roteiro na seção 3.4).
 - **Três terminais** para uma partida: um para o servidor e um para cada jogador. Podem ser na mesma máquina (endereço `127.0.0.1`) ou em máquinas diferentes na mesma rede.
-- **Rede**: o computador do servidor precisa ser alcançável pelos clientes (IP ou nome) e a **porta TCP** escolhida precisa estar liberada no firewall. A porta deve ser configurável; sugerimos `5050` como padrão.
-- **Execução**: `python servidor.py [porta]` (fase 3, porta padrão `5050`, ouve em todas as interfaces) e `python cliente.py [endereco_do_servidor] [porta]` (fase 4, padrões `127.0.0.1` e `5050`).
+- **Rede**: o computador do servidor precisa ser alcançável pelos clientes (pelo IP) e a **porta TCP** escolhida precisa estar liberada no firewall dele. Porta padrão: `5050`.
 - Terminal que exiba UTF-8, pois as mensagens de texto têm acentos. Os tabuleiros usam só caracteres ASCII.
+
+### 3.2 Argumentos dos programas
+
+Os argumentos são **posicionais** (não há opções como `--porta`):
+
+| Comando | Argumentos | Padrões |
+|---------|------------|---------|
+| `servidor.py [porta]` | `porta`: 1 a 65535 | `5050`. Sempre escuta em **`0.0.0.0`** (todas as interfaces); o endereço de escuta não é configurável. |
+| `cliente.py [endereco_do_servidor] [porta]` | `endereco_do_servidor`: IP ou nome; `porta`: 1 a 65535 | `127.0.0.1` e `5050`. Para informar a porta é preciso informar também o endereço. |
+
+Códigos de saída: `0` ao terminar normalmente; `1` se o cliente não conseguiu conectar ou o servidor não conseguiu abrir a porta; `2` para argumentos inválidos.
+
+### 3.3 Executar no mesmo computador
+
+Abra três terminais na **raiz do projeto** (a pasta que contém `servidor.py`).
+
+Windows PowerShell:
+
+```powershell
+py -3 servidor.py                 # terminal 1
+py -3 cliente.py                  # terminal 2: vira o jogador 1
+py -3 cliente.py                  # terminal 3: vira o jogador 2
+```
+
+Linux/macOS:
+
+```bash
+python3 servidor.py               # terminal 1
+python3 cliente.py                # terminal 2
+python3 cliente.py                # terminal 3
+```
+
+Outra porta (se a `5050` estiver ocupada), nos três terminais: `py -3 servidor.py 6000` e `py -3 cliente.py 127.0.0.1 6000`.
+
+O primeiro cliente a conectar é o jogador 1 e fica em `[AGUARDE]`; quando o segundo conecta, a partida começa e o jogador 1 joga primeiro.
+
+**Como jogar.** Na sua vez o programa mostra `Sua vez! Digite a coordenada (A1-E5) ou SAIR:`. Digite a coordenada, por exemplo `B3` (letra = coluna, número = linha; minúsculas e espaços são aceitos, o cliente normaliza). Uma coordenada inválida ou repetida mostra `[ERRO]` e pede outra, sem perder a vez. **Como sair:** na sua vez, digite `SAIR`; **enquanto espera o adversário** (ou o segundo jogador), `SAIR` não é lido, então use `Ctrl+C`, que vale a qualquer momento e envia `SAIR` ao servidor. Nos dois casos o adversário é avisado (`FIM ADVERSARIO_SAIU`) e, se você era o primeiro e ainda esperava, a vaga é liberada. No tabuleiro: `~` água/desconhecido, `O` tiro na água, `X` navio atingido, `N` navio seu intacto. Para parar o servidor, `Ctrl+C` no terminal dele.
+
+### 3.4 Executar em dois computadores na mesma rede
+
+O servidor ouve em `0.0.0.0`, isto é, **em todas as interfaces de rede** do computador (loopback, Wi-Fi, Ethernet), e não só em `127.0.0.1`. Por isso um cliente de **outra máquina** consegue conectar. O cliente, porém, precisa do **endereço IP real do computador do servidor** na rede local. **Nunca use `0.0.0.0` nem `127.0.0.1` no cliente de outra máquina:** `127.0.0.1` seria o próprio computador do cliente.
+
+**Passo 1. Descobrir o IP do computador do servidor** (use o IPv4 da interface conectada à rede local, geralmente começa com `192.168.` ou `10.`):
+
+```powershell
+ipconfig                                   # Windows: "Endereço IPv4" do adaptador Wi-Fi/Ethernet
+```
+```bash
+hostname -I                                # Linux
+ipconfig getifaddr en0                     # macOS (Wi-Fi; use en1 se estiver vazio)
+```
+
+**Passo 2. Liberar a porta no firewall do computador do servidor.** Windows PowerShell **como administrador** (ou aceite o aviso do Firewall que aparece na primeira vez que o Python abre a porta):
+
+```powershell
+New-NetFirewallRule -DisplayName "Batalha Naval" -Direction Inbound -Protocol TCP -LocalPort 5050 -Action Allow -Profile Private
+```
+
+Linux com `ufw`: `sudo ufw allow 5050/tcp`. Para remover a regra do Windows depois: `Remove-NetFirewallRule -DisplayName "Batalha Naval"`.
+
+**Passo 3. Abrir o servidor** no computador A e **os clientes** no A e/ou no B (exemplo com o IP `192.168.0.10`; troque pelo seu):
+
+```powershell
+py -3 servidor.py                          # computador A (servidor)
+py -3 cliente.py 192.168.0.10              # computador A ou B: jogador 1
+py -3 cliente.py 192.168.0.10              # computador B: jogador 2
+```
+(Linux/macOS: `python3` no lugar de `py -3`.) Com outra porta: `py -3 servidor.py 6000` e `py -3 cliente.py 192.168.0.10 6000`.
+
+**Se não conectar:** confira que os dois computadores estão na mesma rede (Wi-Fi "de convidados" costuma isolar os dispositivos), teste a porta a partir do cliente com `Test-NetConnection -ComputerName 192.168.0.10 -Port 5050` (PowerShell) e confira se o servidor está rodando (`Servidor ouvindo em 0.0.0.0:5050`).
+
+**O que foi verificado e o que não foi.** Verificado: o servidor em `0.0.0.0` aceitou dois clientes conectados pelo **IP de rede da própria máquina** (não só por `127.0.0.1`) e conduziu a partida. **Não verificado:** conexão entre dois computadores físicos, nem a regra de firewall acima. `Ctrl+C` foi verificado no cliente (esperando o adversário e parado no prompt) e no servidor, em console real no Windows e em pseudo-terminal no Linux. Roteiro curto para concluir: (1) no computador A, `ipconfig` e anote o IPv4; (2) no A, crie a regra de firewall e rode `py -3 servidor.py`; (3) no B, rode `Test-NetConnection -ComputerName <IP do A> -Port 5050` e confirme `TcpTestSucceeded : True`; (4) no B, `py -3 cliente.py <IP do A>` e, no A, `py -3 cliente.py <IP do A>`; (5) jogue até o `FIM` e confira que o servidor mostra `Partida encerrada`.
 
 ## 4. Por que TCP
 
@@ -286,9 +408,11 @@ A classe não tem sockets, não envia `FIM` e não trata `SAIR` ou desconexões.
 ### Usando o servidor.py (fases 3 e 6)
 
 ```
-python servidor.py          # porta 5050
+python servidor.py          # porta 5050, escuta em 0.0.0.0
 python servidor.py 6000     # outra porta
 ```
+
+(No Windows, `py -3 servidor.py ...`; ver a [seção 3](#3-requisitos-mínimos-e-como-executar).)
 
 O servidor mostra no terminal cada evento (conexões, início, disparos e resultados, saídas). Para encerrá-lo, use Ctrl+C.
 
@@ -314,7 +438,7 @@ Como o servidor está organizado:
 
 Eventos de uma conexão que o servidor já encerrou são ignorados. Se o jogador 1 tiver caído no exato momento em que o segundo chega (o envio de `INICIO` falha), a partida não começa e quem chegou vira o jogador 1 (observação da seção 9.2).
 
-### Usando o cliente.py (fase 4)
+### Usando o cliente.py (fases 4, 7 e 8)
 
 ```
 python cliente.py                  # conecta em 127.0.0.1:5050
@@ -322,9 +446,15 @@ python cliente.py 192.168.0.10     # conecta em outro IP na porta 5050
 python cliente.py 127.0.0.1 6000   # endereço e porta personalizados
 ```
 
-O que já funciona (linhas da tabela 9.3): conexão TCP com leitor único (`makefile("rb")`), transição entre `CONECTADO`, `MINHA_VEZ`, `VEZ_ADVERSARIO` e `ENCERRADO`, exibição de `AGUARDE`, desenho dos dois tabuleiros iniciais ao receber `INICIO`, tratamento de `ATUALIZACAO`, decisão de `ERRO` pelo campo `codigo` (encerrando em `SERVIDOR_CHEIO`), encerramento limpo ao receber `FIM` (`VITORIA`, `ADVERSARIO_SAIU`, `ADVERSARIO_DESCONECTOU`), envio de `SAIR` via `Ctrl+C` e tratamento de queda de conexão (`ConexaoEncerrada` / `MensagemInvalida`).
+(No Windows, `py -3 cliente.py ...`; ver a [seção 3](#3-requisitos-mínimos-e-como-executar).)
 
-**Implementado na Fase 7:** `ao_minha_vez()` lê a coordenada digitada pelo jogador (`input()`), normaliza com `.strip().upper()`, envia `{"tipo": "DISPARAR", "coordenada": entrada}` ao servidor; se o jogador digitar `SAIR`, chama `enviar_sair()` e encerra o loop. `EOFError` e `KeyboardInterrupt` durante o `input()` também encerram via `enviar_sair()`.
+O que o cliente faz (linhas da tabela 9.3): conexão TCP com leitor único (`makefile("rb")`), transição entre `CONECTADO`, `MINHA_VEZ`, `VEZ_ADVERSARIO` e `ENCERRADO`, exibição de `AGUARDE`, desenho dos dois tabuleiros ao receber `INICIO` e `ATUALIZACAO`, decisão de `ERRO` pelo campo `codigo` (encerrando em `SERVIDOR_CHEIO`), encerramento limpo ao receber `FIM` (`VITORIA`, `ADVERSARIO_SAIU`, `ADVERSARIO_DESCONECTOU`), envio de `SAIR` e tratamento de queda de conexão (`ConexaoEncerrada` / `MensagemInvalida`).
+
+**Entrada (fase 7).** `ao_minha_vez()` lê a coordenada digitada pelo jogador (`input()`), normaliza com `.strip().upper()` e envia `{"tipo": "DISPARAR", "coordenada": entrada}`; se o jogador digitar `SAIR`, chama `enviar_sair()` e encerra. `EOFError` e `KeyboardInterrupt` durante o `input()` também encerram via `enviar_sair()`. O cliente **não valida** a coordenada: quem decide é o servidor, que responde `ERRO` e o cliente pede outra.
+
+**Recepção durante a digitação (fase 8).** Antes, o cliente chamava `input()` na mesma thread que lia o socket; se o adversário saísse enquanto o jogador estava no prompt, o `FIM` ficava esperando até ele apertar Enter. Agora a leitura da rede e a do teclado são threads separadas, ligadas à thread principal por uma fila (seção 2.1). O `FIM` encerra o cliente imediatamente. Como a thread do teclado só existe na vez do jogador, **`SAIR` só pode ser digitado na vez dele**; enquanto espera o adversário, a saída é `Ctrl+C`, que envia `SAIR`. Linhas digitadas fora da vez ficam no buffer do terminal e serão lidas no próximo `input()`.
+
+**Encerramento com o teclado ocupado.** Não existe como interromper um `input()` de outra thread. Se o `FIM` chega enquanto a thread do teclado ainda espera uma linha, o `main()` fecha o socket, descarrega a saída e usa `os._exit(0)`: no Linux, com o `stdin` num terminal, a finalização normal do interpretador ficou travada nessa leitura (reproduzido com Python 3.12 e `pty`). No Windows a finalização normal funciona, mas o comportamento é o mesmo nos dois sistemas. Sem leitura pendente (por exemplo, `SAIR` digitado ou `Ctrl+C` fora do prompt), o programa termina normalmente.
 
 ## 7. Catálogo de mensagens
 
@@ -594,14 +724,48 @@ Para detectar isso, o servidor precisa continuar lendo o socket do jogador 1 enq
 | `CONECTADO` | Recebe `AGUARDE` | Mostra a mensagem | `CONECTADO` |
 | `CONECTADO` | Recebe `INICIO` | Guarda o número do jogador; desenha os dois tabuleiros | `MINHA_VEZ` se `sua_vez`, senão `VEZ_ADVERSARIO` |
 | `MINHA_VEZ` | Usuário digita uma coordenada | Normaliza (`strip().upper()`); envia `DISPARAR` | `MINHA_VEZ` (aguarda a resposta do servidor) |
+| `MINHA_VEZ` | Usuário digita `SAIR` (ou fim da entrada, `EOF`) | Envia `SAIR`; fecha o socket | `ENCERRADO` |
 | `MINHA_VEZ` / `VEZ_ADVERSARIO` | Recebe `ATUALIZACAO` | Redesenha os tabuleiros; mostra coordenada e resultado | `MINHA_VEZ` se `sua_vez`, senão `VEZ_ADVERSARIO` |
 | qualquer ativo | Recebe `ERRO` | Mostra a `mensagem`; **o estado não muda**; se era sua vez, pede outra coordenada | O mesmo |
-| qualquer ativo | Recebe `FIM` | Mostra o desfecho (`VITORIA` com `vencedor` igual ou diferente do seu número, ou aviso de saída/desconexão do adversário) | `ENCERRADO` |
-| qualquer ativo | Usuário pede para sair | Envia `SAIR`; fecha o socket | `ENCERRADO` |
+| qualquer ativo | Recebe `FIM`, **inclusive enquanto o usuário ainda não digitou nada** | Mostra o desfecho (`VITORIA` com `vencedor` igual ou diferente do seu número, ou aviso de saída/desconexão do adversário) e encerra sem esperar a digitação | `ENCERRADO` |
+| qualquer ativo | `Ctrl+C` | Envia `SAIR`; fecha o socket | `ENCERRADO` |
 | qualquer ativo | `ConexaoEncerrada` / `MensagemIncompleta` sem ter recebido `FIM` | Mostra "conexão perdida" | `ENCERRADO` |
 | qualquer ativo | `MensagemInvalida` vinda do servidor | Trata como falha de protocolo; fecha o socket | `ENCERRADO` |
 
-O cliente sabe se foi ele quem atirou comparando `atirador` com o seu número de `jogador`, recebido no `INICIO`. Se o cliente for encerrado de forma brusca (por exemplo, Ctrl+C) o servidor percebe a conexão encerrada e trata como desconexão.
+O cliente sabe se foi ele quem atirou comparando `atirador` com o seu número de `jogador`, recebido no `INICIO`. Se o cliente for encerrado de forma brusca (processo morto, rede caída) o servidor percebe a conexão encerrada e trata como desconexão; com `Ctrl+C` o cliente ainda tem tempo de enviar `SAIR`.
+
+### 9.4 Diagramas de estados
+
+Servidor (os números são as linhas da tabela 9.2). `ENCERRADA` é transitório e não aparece:
+
+```
+                          1: um cliente conecta
+        [SEM_JOGADORES] ---------------------------> [AGUARDANDO_SEGUNDO]
+              ^  ^                                          |        |
+              |  |        4/5: jogador 1 sai ou cai        |        | 2: o segundo cliente conecta
+              |  +-----------------------------------------+        v
+              |                                                  [VEZ_J1] <----+
+              |                                                    |  |  6: disparo válido
+              |        7 (vitória), 11 (SAIR), 12 (desconexão)     |  +----> [VEZ_J2]  (e de volta)
+              +----------------------------------------------------+
+                        fecha as conexões e volta a SEM_JOGADORES
+
+     Não mudam o estado: 3 (DISPARAR sem partida), 8, 9 e 10 (erros) e 13 (terceiro cliente).
+```
+
+Cliente:
+
+```
+ [CONECTADO]        --- INICIO (sua_vez = true) ---------------->  [MINHA_VEZ]
+ [CONECTADO]        --- INICIO (sua_vez = false) --------------->  [VEZ_ADVERSARIO]
+ [MINHA_VEZ]        --- ATUALIZACAO (sua_vez = false) ---------->  [VEZ_ADVERSARIO]
+ [VEZ_ADVERSARIO]   --- ATUALIZACAO (sua_vez = true) ----------->  [MINHA_VEZ]
+ [MINHA_VEZ]        --- ERRO (coordenada inválida, repetida...) ->  [MINHA_VEZ]  (pede outra)
+ [CONECTADO]        --- AGUARDE ou ERRO PARTIDA_NAO_INICIADA ---->  [CONECTADO]
+
+ Qualquer estado ativo --- FIM, SAIR digitado, Ctrl+C, ERRO SERVIDOR_CHEIO,
+                           conexão perdida ou mensagem inválida do servidor --->  [ENCERRADO]
+```
 
 ## 10. Exemplo de turno completo
 
@@ -659,6 +823,8 @@ Jogador 1 (navios A1-B1 e D4-D5)     Jogador 2 (navios D1-E1 e B3-B4)
   "navios_restantes": {"proprio": 2, "adversario": 2}
 }
 ```
+
+Estas são exatamente as duas mensagens que `tests/test_integracao.py` (`test_disparo_valido_atualiza_os_dois_clientes`) confere campo a campo contra o servidor real, com esses tabuleiros fixos.
 
 ### O que cada lado pode ver
 
@@ -735,11 +901,18 @@ Cuidados:
 
 ## 12. Testes
 
-A partir da raiz do projeto:
+A partir da raiz do projeto, para executar **todos** os testes (157, cerca de 7 s no Windows; no Linux o encerramento do servidor em cada teste espera até 0,5 s e a suíte leva mais tempo):
 
+```powershell
+py -3 -m unittest discover -s tests -v          # Windows PowerShell
 ```
-python -m unittest discover -s tests -v
+```bash
+python3 -m unittest discover -s tests -v        # Linux/macOS
 ```
+
+Os testes não precisam de servidor aberto: cada um sobe o seu, numa porta livre de `127.0.0.1`. Para executar só os testes de integração: `py -3 -m unittest discover -s tests -p "test_integracao.py" -v`.
+
+`tests/test_integracao.py` (fase 8) joga o **jogo completo** com o servidor real e clientes reais por TCP. Usa tabuleiros fixos (jogador 1: `A1-B1` e `D4-D5`; jogador 2: `D1-E1` e `B3-B4`) para que acerto, afundamento e vitória sejam previsíveis; o sorteio de posições do jogo normal continua sendo o padrão do `Servidor`. Cobre: primeiro jogador aguarda e a partida começa com o segundo; `INICIO` de cada um e quem começa; cada jogador vê só os próprios navios e nunca recebe `N` do adversário; disparo válido atualizando os dois (a mensagem da seção 10); coordenada inválida, disparo repetido e disparo fora da vez gerando o `ERRO` certo só para quem errou, sem mudar tabuleiros nem vez; água, acerto, afundamento e vitória dos dois jogadores; `ATUALIZACAO` final antes do `FIM` e fechamento das conexões; `SAIR` e queda brusca (RST) por quem joga e por quem espera a vez; saída e queda do primeiro jogador durante a espera liberando a vaga; terceiro cliente recebendo `SERVIDOR_CHEIO` sem afetar a partida; nova partida com estado novo depois de vitória e depois de saída. Também usa a classe `Cliente` real (o cliente parado no prompt encerra ao receber `FIM`; atualizações recebidas enquanto espera; `Ctrl+C` enviando `SAIR`) e **processos reais** de `servidor.py` e `cliente.py` com entrada pelo `stdin`: partida completa até a vitória com tabuleiros sorteados, `FIM` com o cliente esperando digitação, `SAIR` digitado, terceiro cliente recusado e cliente sem servidor (código de saída 1). Todo socket, processo e thread é encerrado ao fim de cada teste, e as esperas têm prazo de 5 s.
 
 Para executar somente os testes do tabuleiro (sem sockets, servidor ou cliente):
 
@@ -783,3 +956,25 @@ Pontos em que o enunciado deixava margem e o protocolo fixou uma escolha. Qualqu
 6. Um terceiro cliente recebe `ERRO` `SERVIDOR_CHEIO` e é desconectado.
 7. Após o `FIM`, o servidor fecha as duas conexões e volta a aceitar uma nova partida; "jogar de novo" exige reconectar os clientes.
 8. Porta padrão sugerida: `5050`.
+9. O servidor escuta em `0.0.0.0` (todas as interfaces) e o endereço de escuta não é configurável; só a porta é.
+10. O servidor conduz **uma partida por vez**: com a partida em andamento, o terceiro cliente é recusado (`SERVIDOR_CHEIO`).
+11. No cliente, `SAIR` só é lido na vez do jogador; fora da vez, a saída é `Ctrl+C` (que também envia `SAIR`).
+
+## 15. Roteiro de demonstração (cerca de 3 minutos)
+
+Preparação (antes de apresentar): três janelas de terminal lado a lado na raiz do projeto e o `readme.md` aberto na seção 7. Como os navios são sorteados, não se sabe de antemão onde estão; por isso o roteiro não depende de acertos.
+
+| Tempo | O que fazer | O que mostrar e dizer |
+|-------|-------------|-----------------------|
+| 0:00 | Terminal 1: `py -3 servidor.py` | `Servidor ouvindo em 0.0.0.0:5050`. "Um servidor, uma conexão TCP por jogador; o servidor é a única fonte da verdade." |
+| 0:20 | Terminal 2: `py -3 cliente.py` | O jogador 1 recebe `[AGUARDE]`; no log do servidor aparece `registrado; aguardando o segundo jogador`. |
+| 0:35 | Terminal 3: `py -3 cliente.py` | Os dois recebem `INICIO` e o seu tabuleiro (com `N`); o adversário está todo em `~`. O jogador 1 mostra `Sua vez!`; o 2 mostra `Aguardando o adversário atirar...`. |
+| 0:55 | Terminal 2 (jogador 1): digitar `z9` | `[ERRO] Coordenada inválida` e o prompt volta: **erro só para quem errou, a vez não muda**. |
+| 1:10 | Terminal 2: digitar `b3` (minúsculo) | Resultado `AGUA`, `ACERTO` ou `AFUNDOU`. O jogador 1 vê `O`/`X` em B3 no tabuleiro do adversário; o jogador 2 vê o mesmo disparo no **seu** tabuleiro e **recebe a vez**. Explicar o caminho da jogada (seção 10): cliente → `DISPARAR` → servidor valida com `Partida` → uma `ATUALIZACAO` para cada jogador, cada uma com a sua visão. |
+| 1:40 | Terminal 3 (jogador 2): digitar `b3`; terminal 2: digitar `c1`; terminal 3: digitar `b3` outra vez | Cada um só vê os próprios navios; nenhum `N` do adversário aparece. A segunda `b3` do jogador 2 gera `[ERRO] Você já atirou em B3` (`DISPARO_REPETIDO`) e ele continua com a vez. |
+| 2:05 | Abrir um **quarto** terminal: `py -3 cliente.py` | `[ERRO] Já existe uma partida em andamento... (servidor cheio)` e o programa termina; a partida não é afetada. |
+| 2:20 | No terminal do jogador que **não** está na vez: `Ctrl+C` | Esse cliente envia `SAIR`; o outro, **mesmo parado no prompt**, imprime `[FIM] O adversário saiu da partida.` e encerra sozinho. O log do servidor mostra `Partida encerrada (ADVERSARIO_SAIU)`. |
+| 2:40 | Abrir dois clientes de novo | O servidor aceitou outra dupla: partida nova, tabuleiros novos. |
+| 2:50 | Terminal 4: `py -3 -m unittest discover -s tests -v` | `Ran 157 tests ... OK`: protocolo, regras, servidor, cliente e integração com o servidor real. |
+
+Se sobrar tempo, jogue até a vitória: o último disparo gera uma `ATUALIZACAO` e depois o `FIM` (`Você venceu!` / `O jogador N venceu.`), e o servidor fecha as conexões e volta a aceitar outra partida.
