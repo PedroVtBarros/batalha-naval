@@ -40,10 +40,10 @@ No Linux/macOS, troque `py -3` por `python3`.
 |------|---------|-------------|----------|
 | 1 | Protocolo: `protocolo.py`, este `readme.md` e `tests/test_protocolo.py` | Pedro Vitor Moura de Araujo Barros | **Implementado** |
 | 2 | Tabuleiro: criar, posicionar navios e verificar disparos | Henrique Sousa Brito | **Implementado** |
-| 3 | Servidor: aceitar os dois jogadores e aguardar o segundo | JuanBarrer4 (identificação no GitHub) | **Implementado** |
+| 3 | Servidor: aceitar os dois jogadores e aguardar o segundo | Juan Barrera  | **Implementado** |
 | 4 | Cliente: conectar ao servidor e receber mensagens | Ariel Pina | **Implementado** |
 | 5 | Regras da partida: turnos, vitória e visão de cada jogador | Henrique Sousa Brito | **Implementado** |
-| 6 | Servidor: integrar as regras, receber disparos e enviar resultados | JuanBarrer4 (identificação no GitHub) | **Implementado** |
+| 6 | Servidor: integrar as regras, receber disparos e enviar resultados | Juan Barrera  | **Implementado** |
 | 7 | Cliente: interface e entrada dos disparos | Ariel Pina | **Implementado** |
 | 8 | Testes de integração e fechamento da documentação | Pedro Vitor Moura de Araujo Barros | **Implementado** |
 
